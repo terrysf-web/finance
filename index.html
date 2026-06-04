@@ -13,6 +13,47 @@
     <link rel="apple-touch-icon" href="icon-192.png" />
   </head>
   <body>
+    <!-- PIN Lock Screen -->
+    <div id="lockScreen" style="
+      display:none;position:fixed;inset:0;z-index:9999;
+      background:linear-gradient(180deg,#0c1830,#081121);
+      display:flex;flex-direction:column;align-items:center;justify-content:center;gap:24px;
+    ">
+      <div style="text-align:center;color:white">
+        <div style="
+          width:72px;height:72px;border-radius:20px;margin:0 auto 16px;
+          background:linear-gradient(145deg,#14b8c4,#276ef1);
+          display:grid;place-items:center;font-size:28px;font-weight:800;color:white
+        ">FL</div>
+        <h2 style="margin:0;font-size:24px">Terry Family Finance</h2>
+        <p style="margin:8px 0 0;color:rgba(255,255,255,0.6);font-size:14px" id="lockSubtitle">PIN을 입력하세요</p>
+      </div>
+
+      <div style="display:flex;gap:14px;margin:8px 0" id="pinDots">
+        <div class="pin-dot"></div>
+        <div class="pin-dot"></div>
+        <div class="pin-dot"></div>
+        <div class="pin-dot"></div>
+      </div>
+
+      <div id="pinPad" style="display:grid;grid-template-columns:repeat(3,72px);gap:12px"></div>
+
+      <p id="lockError" style="color:#ff6b6b;font-size:13px;min-height:20px;margin:0"></p>
+
+      <p id="setupHint" style="color:rgba(255,255,255,0.4);font-size:12px;margin:0;text-align:center;max-width:260px"></p>
+    </div>
+
+    <style>
+      .pin-dot {
+        width: 14px; height: 14px;
+        border-radius: 50%;
+        border: 2px solid rgba(255,255,255,0.4);
+        background: transparent;
+        transition: background 0.2s;
+      }
+      .pin-dot.filled { background: white; border-color: white; }
+    </style>
+
     <div class="app-shell">
       <aside class="sidebar" aria-label="Primary navigation">
         <div class="brand">

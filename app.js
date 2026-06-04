@@ -1,6 +1,132 @@
 const STORAGE_KEY = "terry-family-finance-advisor-v1";
 const LAST_SAVED_KEY = "terry-family-finance-advisor-v1-last-saved";
 const REMINDERS_KEY = "terry-family-reminders-v1";
+const PIN_KEY = "terry-finance-pin-hash";
+
+// ── PIN Lock ──────────────────────────────────────────────
+async function hashPin(pin) {
+  const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(pin + "terry-salt-2026"));
+  return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2, "0")).join("");
+}
+
+let pinEntry = "";
+let pinMode = ""; // "setup" | "confirm" | "unlock"
+let pinFirstEntry = "";
+
+async function initLock() {
+  const savedPin = localStorage.getItem(PIN_KEY);
+  const lock = document.getElementById("lockScreen");
+  const shell = document.querySelector(".app-shell");
+
+  if (sessionStorage.getItem("terry-unlocked") === "1") {
+    lock.style.display = "none";
+    shell.style.display = "grid";
+    return;
+  }
+
+  lock.style.display = "flex";
+  shell.style.display = "none";
+
+  if (!savedPin) {
+    pinMode = "setup";
+    document.getElementById("lockSubtitle").textContent = "새 PIN 4자리를 설정하세요";
+    document.getElementById("setupHint").textContent = "처음 사용 시 본인만의 PIN을 설정합니다. 잊어버리면 Reset이 필요해요.";
+  } else {
+    pinMode = "unlock";
+    document.getElementById("lockSubtitle").textContent = "PIN을 입력하세요";
+  }
+}
+
+window.pinPress = async function(key) {
+  const error = document.getElementById("lockError");
+  error.textContent = "";
+
+  if (key === "⌫") {
+    pinEntry = pinEntry.slice(0, -1);
+    updateDots();
+    return;
+  }
+  if (key === "" || pinEntry.length >= 4) return;
+
+  pinEntry += key;
+  updateDots();
+
+  if (pinEntry.length < 4) return;
+
+  // Full PIN entered
+  const hashed = await hashPin(pinEntry);
+
+  if (pinMode === "setup") {
+    pinFirstEntry = pinEntry;
+    pinEntry = "";
+    updateDots();
+    pinMode = "confirm";
+    document.getElementById("lockSubtitle").textContent = "PIN을 다시 입력하세요";
+    document.getElementById("setupHint").textContent = "";
+    return;
+  }
+
+  if (pinMode === "confirm") {
+    if (pinEntry === pinFirstEntry) {
+      localStorage.setItem(PIN_KEY, hashed);
+      sessionStorage.setItem("terry-unlocked", "1");
+      document.getElementById("lockScreen").style.display = "none";
+      document.querySelector(".app-shell").style.display = "grid";
+    } else {
+      error.textContent = "PIN이 일치하지 않아요. 다시 시도하세요.";
+      pinEntry = "";
+      pinFirstEntry = "";
+      pinMode = "setup";
+      document.getElementById("lockSubtitle").textContent = "새 PIN 4자리를 설정하세요";
+      updateDots();
+    }
+    return;
+  }
+
+  if (pinMode === "unlock") {
+    const savedPin = localStorage.getItem(PIN_KEY);
+    if (hashed === savedPin) {
+      sessionStorage.setItem("terry-unlocked", "1");
+      document.getElementById("lockScreen").style.display = "none";
+      document.querySelector(".app-shell").style.display = "grid";
+    } else {
+      error.textContent = "PIN이 틀렸어요. 다시 시도하세요.";
+      pinEntry = "";
+      updateDots();
+    }
+  }
+};
+
+function updateDots() {
+  document.querySelectorAll(".pin-dot").forEach((dot, i) => {
+    dot.classList.toggle("filled", i < pinEntry.length);
+  });
+}
+
+document.addEventListener("DOMContentLoaded", () => {
+  // Build PIN pad
+  const keys = [1,2,3,4,5,6,7,8,9,"",0,"⌫"];
+  const pad = document.getElementById("pinPad");
+  if (pad) {
+    keys.forEach(k => {
+      const btn = document.createElement("button");
+      btn.textContent = k;
+      if (k !== "") btn.onclick = () => pinPress(String(k));
+      btn.style.cssText = `
+        width:72px;height:72px;border-radius:50%;border:0;
+        background:${k === "" ? "transparent" : "rgba(255,255,255,0.12)"};
+        color:white;font-size:${k === "⌫" ? "20px" : "24px"};font-weight:700;
+        cursor:${k === "" ? "default" : "pointer"};transition:background 0.15s;
+      `;
+      if (k !== "") {
+        btn.onmouseover = () => btn.style.background = "rgba(255,255,255,0.22)";
+        btn.onmouseleave = () => btn.style.background = "rgba(255,255,255,0.12)";
+      }
+      pad.appendChild(btn);
+    });
+  }
+  initLock();
+});
 
 const sampleData = {
   profile: {
