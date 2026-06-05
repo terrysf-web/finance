@@ -1615,3 +1615,170 @@ document.getElementById("saveReminderButton").addEventListener("click", () => {
 renderNav();
 setPage(currentPage);
 setSaveStatus(false);
+
+// ── AI Chat ───────────────────────────────────────────────
+const AI_ENDPOINT_KEY = "terry-ai-endpoint";
+const AI_CHAT_HISTORY_KEY = "terry-ai-chat-history";
+let aiChatHistory = [];
+let aiIsSending = false;
+
+function buildFinancialContext() {
+  const s = state;
+  const calc = calcAll ? calcAll(s) : null;
+  return [
+    `## Terry 가족 재무 현황 (${new Date().toLocaleDateString("ko-KR")})`,
+    `### 가구 정보`,
+    `- 이름: ${s.profile?.parentName || "Terry"}`,
+    `- 월 소득: $${(s.household?.monthlyIncome || 0).toLocaleString()}`,
+    `- 월 지출: $${(s.household?.monthlyExpenses || 0).toLocaleString()}`,
+    `- 월 저축 여력: $${((s.household?.monthlyIncome || 0) - (s.household?.monthlyExpenses || 0) - (s.household?.retirementContribution || 0)).toLocaleString()}`,
+    ``,
+    `### 자산 현황`,
+    `- 현금/예금: $${(s.household?.cash || 0).toLocaleString()}`,
+    `- 투자자산: $${(s.household?.investments || 0).toLocaleString()}`,
+    `- 은퇴계좌: $${(s.household?.retirement || 0).toLocaleString()}`,
+    `- 주택 에퀴티: $${(s.household?.homeEquity || 0).toLocaleString()}`,
+    `- 부채(모기지 제외): $${(s.household?.debts || 0).toLocaleString()}`,
+    ``,
+    `### 대학 자금`,
+    `- 대학 시작까지: ${s.college?.yearsUntilStart || 0}년`,
+    `- 예상 연간 학비: $${(s.college?.annualCost || 0).toLocaleString()}`,
+    `- 대학 펀드 잔액: $${(s.college?.collegeFund || 0).toLocaleString()}`,
+    ``,
+    `### 주택 구매 계획`,
+    `- 목표 주택 가격: $${(s.house?.housePrice || 0).toLocaleString()}`,
+    `- 계획 다운페이먼트: $${(s.house?.downPayment || 0).toLocaleString()}`,
+    `- 모기지 금리: ${s.house?.interestRate || 0}%`,
+    ``,
+    `### 은퇴 계획`,
+    `- 목표 은퇴 나이: ${s.profile?.retirementTargetAge || 65}세`,
+    `- 현재 나이: ${s.profile?.parentAge || 0}세`,
+    `- 월 은퇴 기여금: $${(s.household?.retirementContribution || 0).toLocaleString()}`,
+  ].join("\n");
+}
+
+function getAIEndpoint() {
+  return localStorage.getItem(AI_ENDPOINT_KEY) || "";
+}
+
+function appendMessage(role, text) {
+  const container = document.getElementById("aiChatMessages");
+  const div = document.createElement("div");
+  div.className = `ai-msg ai-msg--${role}`;
+  div.textContent = text;
+  container.appendChild(div);
+  container.scrollTop = container.scrollHeight;
+  return div;
+}
+
+function showThinking() {
+  const container = document.getElementById("aiChatMessages");
+  const div = document.createElement("div");
+  div.className = "ai-msg ai-msg--thinking";
+  div.id = "aiThinking";
+  container.appendChild(div);
+  container.scrollTop = container.scrollHeight;
+}
+
+function removeThinking() {
+  const el = document.getElementById("aiThinking");
+  if (el) el.remove();
+}
+
+async function sendAIMessage(userText) {
+  if (aiIsSending || !userText.trim()) return;
+
+  const endpoint = getAIEndpoint();
+  if (!endpoint) {
+    document.getElementById("aiChatConfig").style.display = "block";
+    appendMessage("assistant", "먼저 Firebase Function URL을 설정해 주세요. 아래 입력란에 URL을 입력하세요.");
+    return;
+  }
+
+  aiIsSending = true;
+  document.getElementById("aiChatSend").disabled = true;
+  document.getElementById("aiChatInput").value = "";
+
+  appendMessage("user", userText);
+  aiChatHistory.push({ role: "user", content: userText });
+  showThinking();
+
+  const systemPrompt = `당신은 Terry 가족의 전문 재무 어드바이저입니다. 아래 현재 재무 데이터를 바탕으로 구체적이고 실용적인 조언을 한국어로 제공하세요. 숫자를 인용하며 근거 있는 분석을 해주세요.
+
+${buildFinancialContext()}`;
+
+  try {
+    const res = await fetch(endpoint, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        systemPrompt,
+        messages: aiChatHistory.slice(-10),
+      }),
+    });
+
+    removeThinking();
+
+    if (!res.ok) {
+      const err = await res.text();
+      appendMessage("assistant", `오류가 발생했습니다: ${err}`);
+      aiChatHistory.pop();
+    } else {
+      const data = await res.json();
+      const reply = data.reply || "응답을 받지 못했습니다.";
+      appendMessage("assistant", reply);
+      aiChatHistory.push({ role: "assistant", content: reply });
+    }
+  } catch (err) {
+    removeThinking();
+    appendMessage("assistant", `연결 오류: ${err.message}. Firebase Function URL을 확인해 주세요.`);
+    aiChatHistory.pop();
+  }
+
+  aiIsSending = false;
+  document.getElementById("aiChatSend").disabled = false;
+}
+
+document.addEventListener("DOMContentLoaded", () => {
+  const fab = document.getElementById("aiChatFab");
+  const panel = document.getElementById("aiChatPanel");
+  const closeBtn = document.getElementById("aiChatClose");
+  const sendBtn = document.getElementById("aiChatSend");
+  const input = document.getElementById("aiChatInput");
+  const endpointInput = document.getElementById("aiEndpointInput");
+  const endpointSave = document.getElementById("aiEndpointSave");
+
+  if (!fab) return;
+
+  const saved = getAIEndpoint();
+  if (saved && endpointInput) endpointInput.value = saved;
+
+  fab.addEventListener("click", () => {
+    panel.style.display = panel.style.display === "none" || !panel.style.display ? "flex" : "none";
+    if (panel.style.display === "flex") input.focus();
+  });
+
+  closeBtn.addEventListener("click", () => {
+    panel.style.display = "none";
+  });
+
+  sendBtn.addEventListener("click", () => {
+    sendAIMessage(input.value.trim());
+  });
+
+  input.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
+      sendAIMessage(input.value.trim());
+    }
+  });
+
+  endpointSave.addEventListener("click", () => {
+    const url = endpointInput.value.trim();
+    if (url) {
+      localStorage.setItem(AI_ENDPOINT_KEY, url);
+      document.getElementById("aiChatConfig").style.display = "none";
+      appendMessage("assistant", "설정 완료! 이제 재무 질문을 해보세요.");
+    }
+  });
+});
