@@ -43,6 +43,7 @@
     <div class="sidebar-footer">
       <button id="btnSave" class="btn-primary">저장</button>
       <button id="btnReset" class="btn-ghost">초기화</button>
+      <div id="appVersion" class="app-version"></div>
     </div>
   </aside>
 
@@ -61,8 +62,14 @@
 
     <!-- Page: 자산 현황 -->
     <section class="page active" id="page-assets" data-title="내 자산" data-label="자산 현황">
+
+      <!-- Net worth hero -->
       <div id="networthHero" class="hero-card"></div>
+
+      <!-- Account cards -->
       <div id="accountCards" class="account-grid"></div>
+
+      <!-- Monthly flow -->
       <div class="two-col" style="margin-top:18px">
         <div class="card">
           <p class="card-label">월 소득 / 지출</p>
@@ -78,19 +85,21 @@
 
     <!-- Page: 투자 -->
     <section class="page" id="page-invest" data-title="투자 포트폴리오" data-label="투자">
+
+      <!-- Summary row -->
       <div id="investSummary" class="stat-cards"></div>
-      <div class="two-col" style="margin-top:18px">
-        <div class="card">
-          <p class="card-label">401k</p>
-          <div id="k401Inputs" class="field-list"></div>
-          <div id="k401Funds" style="margin-top:16px"></div>
-        </div>
-        <div class="card">
-          <p class="card-label" id="iraLabel">IRA</p>
-          <div id="iraInputs" class="field-list"></div>
-          <div id="iraFunds" style="margin-top:16px"></div>
-        </div>
+
+      <!-- 401k accounts (dynamically rendered) -->
+      <div id="k401Section" style="margin-top:18px"></div>
+
+      <!-- IRA -->
+      <div class="card" style="margin-top:18px">
+        <p class="card-label" id="iraLabel">IRA</p>
+        <div id="iraInputs" class="field-list"></div>
+        <div id="iraFunds" style="margin-top:16px"></div>
       </div>
+
+      <!-- Stocks -->
       <div class="card" style="margin-top:18px">
         <div class="card-head">
           <p class="card-label">주식 보유 현황 (Taxable)</p>
@@ -112,6 +121,8 @@
           </table>
         </div>
       </div>
+
+      <!-- Asset allocation -->
       <div class="two-col" style="margin-top:18px">
         <div class="card">
           <p class="card-label">자산 배분</p>
@@ -128,19 +139,25 @@
 
     <!-- Page: 목표 -->
     <section class="page" id="page-goals" data-title="목표 플래너" data-label="목표">
+
       <div class="three-col">
+        <!-- College -->
         <div class="card goal-card">
           <div class="goal-icon" style="background:#fff8ec;color:#d99000">🎓</div>
           <p class="card-label">대학 등록금</p>
           <div id="collegeInputs" class="field-list"></div>
           <div id="collegeResult" class="goal-result"></div>
         </div>
+
+        <!-- House -->
         <div class="card goal-card">
           <div class="goal-icon" style="background:#f2f7ff;color:#276ef1">🏠</div>
           <p class="card-label">주택 구매</p>
           <div id="houseInputs" class="field-list"></div>
           <div id="houseResult" class="goal-result"></div>
         </div>
+
+        <!-- Retirement -->
         <div class="card goal-card">
           <div class="goal-icon" style="background:#eefaf5;color:#19a974">🏦</div>
           <p class="card-label">은퇴 계획</p>
@@ -148,6 +165,8 @@
           <div id="retireResult" class="goal-result"></div>
         </div>
       </div>
+
+      <!-- Combined chart -->
       <div class="card" style="margin-top:18px">
         <p class="card-label">연도별 재무 흐름 — 등록금 · 모기지 · 은퇴 잔고</p>
         <canvas id="timelineChart" height="260"></canvas>
@@ -156,6 +175,7 @@
 
     <!-- Page: AI 상담 -->
     <section class="page" id="page-ai" data-title="AI 재무 상담" data-label="AI 상담">
+
       <div class="card" style="max-width:680px;margin-bottom:18px">
         <p class="card-label">Anthropic API 연결</p>
         <div class="field-list" style="margin-top:12px">
@@ -171,6 +191,7 @@
         </div>
         <p style="margin:10px 0 0;font-size:12px;color:var(--muted)">키는 이 기기 브라우저에만 저장됩니다. <a href="https://console.anthropic.com" target="_blank" rel="noopener" style="color:var(--blue)">키 발급 →</a></p>
       </div>
+
       <div class="card chat-card">
         <div id="chatMessages">
           <div id="chatWelcome">
