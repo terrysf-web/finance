@@ -1,2346 +1,698 @@
-const STORAGE_KEY = "terry-family-finance-advisor-v1";
-const LAST_SAVED_KEY = "terry-family-finance-advisor-v1-last-saved";
-const REMINDERS_KEY = "terry-family-reminders-v1";
-const PIN_KEY = "terry-finance-pin-hash";
+// Storage keys
+const SK_STATE    = "tf-state-v2";
+const SK_STOCKS   = "tf-stocks-v2";
+const SK_PIN      = "tf-pin-v2";
+const SK_UNLOCKED = "tf-session";
+const SK_APIKEY   = "tf-apikey";
 
-// ── PIN Lock ──────────────────────────────────────────────
-async function hashPin(pin) {
-  const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(pin + "terry-salt-2026"));
-  return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2, "0")).join("");
+// Default state
+const DEFAULT = {
+  cash:        142000,
+  investments: 0,
+  k401:        620000,
+  ira:         122000,
+  homeEquity:  175000,
+  debts:       52000,
+  income:      18250,
+  expenses:    9350,
+  k401Contrib: 2550,
+  collegeSave: 1250,
+  k401MatchPct:    4,
+  k401MyPct:       8,
+  iraType:     "Roth",
+  iraContrib:  7500,
+  k401Funds: [
+    { name: "Large Cap Index (VIIIX)", pct: 55, type: "stock" },
+    { name: "Bond Index (VBTIX)",      pct: 25, type: "bond"  },
+    { name: "Intl Index (VTPSX)",      pct: 15, type: "stock" },
+    { name: "Money Market",            pct:  5, type: "cash"  }
+  ],
+  iraFunds: [
+    { name: "S&P 500 (FXAIX)",     pct: 70, type: "stock" },
+    { name: "Small Cap (FSSNX)",    pct: 20, type: "stock" },
+    { name: "Bond Fund (FXNAX)",    pct: 10, type: "bond"  }
+  ],
+  targetStocks: 70,
+  targetBonds:  20,
+  targetCash:   10,
+  collegeCost:        45200,
+  collegeInflation:   4.4,
+  collegeYears:       2,
+  collegeFund:        91500,
+  collegeSupport:     38000,
+  collegeLoan:        9500,
+  housePrice:         835000,
+  houseDown:          185000,
+  houseRate:          6.35,
+  houseTerm:          30,
+  houseTax:           1.15,
+  houseInsurance:     275,
+  houseHoa:           175,
+  houseDelay:         1,
+  retireAge:          65,
+  currentAge:         52,
+  retireReturn:       7.0,
+  retireWithdraw:     4.0
+};
+
+const DEFAULT_STOCKS = [
+  { id:1, ticker:"NVDA", name:"NVIDIA Corp",    shares:25,  costBasis:82.50,  currentPrice:215.40, sector:"Technology"  },
+  { id:2, ticker:"AVGO", name:"Broadcom Inc",    shares:18,  costBasis:142.00, currentPrice:178.20, sector:"Technology"  },
+  { id:3, ticker:"FRMI", name:"Forestar Group",  shares:120, costBasis:24.80,  currentPrice:18.30,  sector:"Real Estate" },
+  { id:4, ticker:"PBI",  name:"Pitney Bowes",    shares:200, costBasis:5.40,   currentPrice:3.85,   sector:"Industrials" },
+  { id:5, ticker:"NESR", name:"Natl Energy Svc", shares:150, costBasis:9.20,   currentPrice:7.10,   sector:"Energy"      }
+];
+
+function loadState() {
+  try { return { ...DEFAULT, ...JSON.parse(localStorage.getItem(SK_STATE)) }; }
+  catch { return { ...DEFAULT }; }
 }
+function saveState() { localStorage.setItem(SK_STATE, JSON.stringify(S)); setSaved(true); }
+function loadStocks() {
+  try {
+    const s = JSON.parse(localStorage.getItem(SK_STOCKS));
+    return s && s.length ? s : DEFAULT_STOCKS.map(x => ({ ...x }));
+  } catch { return DEFAULT_STOCKS.map(x => ({ ...x })); }
+}
+function saveStocks(arr) { localStorage.setItem(SK_STOCKS, JSON.stringify(arr)); }
 
-let pinEntry = "";
-let pinMode = ""; // "setup" | "confirm" | "unlock"
-let pinFirstEntry = "";
+let S = loadState();
 
-async function initLock() {
-  const savedPin = localStorage.getItem(PIN_KEY);
-  const lock = document.getElementById("lockScreen");
-  const shell = document.querySelector(".app-shell");
+function setSaved(saved) {
+  const el = document.getElementById("saveStatus");
+  el.textContent = saved ? "저장됨" : "저장 안 됨";
+  el.className = "save-badge" + (saved ? " saved" : "");
+}
+function markDirty() { setSaved(false); }
 
-  if (sessionStorage.getItem("terry-unlocked") === "1") {
-    lock.style.display = "none";
-    shell.style.display = "grid";
-    return;
-  }
+function money(v, compact) {
+  return new Intl.NumberFormat("en-US", {
+    style: "currency", currency: "USD", notation: compact ? "compact" : "standard",
+    maximumFractionDigits: compact ? 1 : 0
+  }).format(v);
+}
+function pct(v) { return (Math.round(v * 10) / 10) + "%"; }
 
-  lock.style.display = "flex";
-  shell.style.display = "none";
-
-  if (!savedPin) {
+// PIN
+async function hashPin(pin) {
+  const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(pin + "tf-salt-2026"));
+  return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2,"0")).join("");
+}
+let pinEntry = "", pinMode = "", pinFirst = "";
+async function initPin() {
+  const saved = localStorage.getItem(SK_PIN);
+  if (sessionStorage.getItem(SK_UNLOCKED) === "1") { unlock(); return; }
+  document.getElementById("lockScreen").style.display = "flex";
+  document.getElementById("app").classList.remove("visible");
+  if (!saved) {
     pinMode = "setup";
     document.getElementById("lockSubtitle").textContent = "새 PIN 4자리를 설정하세요";
-    document.getElementById("setupHint").textContent = "처음 사용 시 본인만의 PIN을 설정합니다. 잊어버리면 Reset이 필요해요.";
+    document.getElementById("setupHint").textContent = "처음 사용 시 본인만의 PIN을 설정합니다.";
   } else {
     pinMode = "unlock";
     document.getElementById("lockSubtitle").textContent = "PIN을 입력하세요";
   }
 }
-
-window.pinPress = async function(key) {
-  const error = document.getElementById("lockError");
-  error.textContent = "";
-
-  if (key === "⌫") {
-    pinEntry = pinEntry.slice(0, -1);
-    updateDots();
-    return;
-  }
-  if (key === "" || pinEntry.length >= 4) return;
-
-  pinEntry += key;
-  updateDots();
-
+function unlock() {
+  document.getElementById("lockScreen").style.display = "none";
+  document.getElementById("app").classList.add("visible");
+}
+function updateDots() {
+  document.querySelectorAll(".dot").forEach((d, i) => d.classList.toggle("filled", i < pinEntry.length));
+}
+async function pinPress(key) {
+  const errEl = document.getElementById("lockError");
+  errEl.textContent = "";
+  if (key === "⌫") { pinEntry = pinEntry.slice(0,-1); updateDots(); return; }
+  if (!key || pinEntry.length >= 4) return;
+  pinEntry += key; updateDots();
   if (pinEntry.length < 4) return;
-
-  // Full PIN entered
   const hashed = await hashPin(pinEntry);
-
   if (pinMode === "setup") {
-    pinFirstEntry = pinEntry;
-    pinEntry = "";
-    updateDots();
+    pinFirst = pinEntry; pinEntry = ""; updateDots();
     pinMode = "confirm";
     document.getElementById("lockSubtitle").textContent = "PIN을 다시 입력하세요";
     document.getElementById("setupHint").textContent = "";
     return;
   }
-
   if (pinMode === "confirm") {
-    if (pinEntry === pinFirstEntry) {
-      localStorage.setItem(PIN_KEY, hashed);
-      sessionStorage.setItem("terry-unlocked", "1");
-      document.getElementById("lockScreen").style.display = "none";
-      document.querySelector(".app-shell").style.display = "grid";
+    if (pinEntry === pinFirst) {
+      localStorage.setItem(SK_PIN, hashed);
+      sessionStorage.setItem(SK_UNLOCKED, "1");
+      unlock();
     } else {
-      error.textContent = "PIN이 일치하지 않아요. 다시 시도하세요.";
-      pinEntry = "";
-      pinFirstEntry = "";
-      pinMode = "setup";
+      errEl.textContent = "PIN이 일치하지 않아요.";
+      pinEntry = ""; pinFirst = ""; pinMode = "setup";
       document.getElementById("lockSubtitle").textContent = "새 PIN 4자리를 설정하세요";
       updateDots();
     }
     return;
   }
-
   if (pinMode === "unlock") {
-    const savedPin = localStorage.getItem(PIN_KEY);
-    if (hashed === savedPin) {
-      sessionStorage.setItem("terry-unlocked", "1");
-      document.getElementById("lockScreen").style.display = "none";
-      document.querySelector(".app-shell").style.display = "grid";
+    if (hashed === localStorage.getItem(SK_PIN)) {
+      sessionStorage.setItem(SK_UNLOCKED, "1"); unlock();
     } else {
-      error.textContent = "PIN이 틀렸어요. 다시 시도하세요.";
-      pinEntry = "";
-      updateDots();
+      errEl.textContent = "PIN이 틀렸어요.";
+      pinEntry = ""; updateDots();
     }
   }
-};
-
-function updateDots() {
-  document.querySelectorAll(".pin-dot").forEach((dot, i) => {
-    dot.classList.toggle("filled", i < pinEntry.length);
-  });
 }
 
-document.addEventListener("DOMContentLoaded", () => {
-  // Build PIN pad
-  const keys = [1,2,3,4,5,6,7,8,9,"",0,"⌫"];
-  const pad = document.getElementById("pinPad");
-  if (pad) {
-    keys.forEach(k => {
-      const btn = document.createElement("button");
-      btn.textContent = k;
-      if (k !== "") btn.onclick = () => pinPress(String(k));
-      btn.style.cssText = `
-        width:72px;height:72px;border-radius:50%;border:0;
-        background:${k === "" ? "transparent" : "rgba(255,255,255,0.12)"};
-        color:white;font-size:${k === "⌫" ? "20px" : "24px"};font-weight:700;
-        cursor:${k === "" ? "default" : "pointer"};transition:background 0.15s;
-      `;
-      if (k !== "") {
-        btn.onmouseover = () => btn.style.background = "rgba(255,255,255,0.22)";
-        btn.onmouseleave = () => btn.style.background = "rgba(255,255,255,0.12)";
-      }
-      pad.appendChild(btn);
-    });
-  }
-  initLock();
-});
-
-const sampleData = {
-  profile: {
-    familyName: "Terry family",
-    parentName: "Terry",
-    studentName: "Terry's son",
-    school: "Purdue University",
-    version: "Version 1 local prototype",
-    parentAge: 52,
-    retirementTargetAge: 65,
-    studentStartYear: 2
-  },
-  household: {
-    monthlyIncome: 18250,
-    monthlyExpenses: 9350,
-    retirementContribution: 2550,
-    collegeMonthlySavings: 1250,
-    cash: 142000,
-    investments: 385000,
-    retirement: 742000,
-    homeEquity: 175000,
-    debts: 52000
-  },
-  accounts: {
-    k401: {
-      balance: 620000,
-      employerMatchPct: 4,
-      myContribPct: 8,
-      vestingYears: 3,
-      funds: [
-        { name: "Large Cap Index (VIIIX)", pct: 55, type: "stock" },
-        { name: "Bond Index (VBTIX)", pct: 25, type: "bond" },
-        { name: "International Index (VTPSX)", pct: 15, type: "stock" },
-        { name: "Money Market", pct: 5, type: "cash" }
-      ]
-    },
-    ira: {
-      balance: 122000,
-      type: "Roth",
-      annualContrib: 7500,
-      funds: [
-        { name: "S&P 500 Index (FXAIX)", pct: 70, type: "stock" },
-        { name: "Small Cap Growth (FSSNX)", pct: 20, type: "stock" },
-        { name: "Bond Fund (FXNAX)", pct: 10, type: "bond" }
-      ]
-    },
-    target: {
-      stocks: 70,
-      bonds: 20,
-      cash: 10
-    }
-  },
-  stocks: [
-    { id: 1, ticker: "NVDA", name: "NVIDIA Corp", shares: 25, costBasis: 82.50, currentPrice: 215.40, sector: "Technology" },
-    { id: 2, ticker: "AVGO", name: "Broadcom Inc", shares: 18, costBasis: 142.00, currentPrice: 178.20, sector: "Technology" },
-    { id: 3, ticker: "FRMI", name: "Forestar Group", shares: 120, costBasis: 24.80, currentPrice: 18.30, sector: "Real Estate" },
-    { id: 4, ticker: "PBI", name: "Pitney Bowes", shares: 200, costBasis: 5.40, currentPrice: 3.85, sector: "Industrials" },
-    { id: 5, ticker: "NESR", name: "Natl Energy Svc", shares: 150, costBasis: 9.20, currentPrice: 7.10, sector: "Energy" }
-  ],
-  college: {
-    annualCost: 45200,
-    inflationRate: 4.4,
-    yearsUntilStart: 2,
-    collegeFund: 91500,
-    annualFamilySupport: 38000,
-    studentLoan: 9500
-  },
-  house: {
-    housePrice: 835000,
-    downPayment: 185000,
-    interestRate: 6.35,
-    loanYears: 30,
-    propertyTaxRate: 1.15,
-    insuranceMonthly: 275,
-    hoaMonthly: 175,
-    purchaseDelayYears: 1
-  },
-  scenario: {
-    delayHomePurchase: 2,
-    housePriceChange: -25000,
-    downPaymentChange: 35000,
-    collegeSupportChange: -4000,
-    studentLoanChange: 10000,
-    interestRateChange: -0.5
-  },
-  funding: {
-    semesterTuition: 49265,
-    stockCurrentValue: 120000,
-    stockCostBasis: 80000,
-    stockExpectedAnnualReturn: 12,
-    useInstallmentPlan: 1,
-    monthsUntil59Half: 4,
-    ordinaryIncomeTaxRate: 22,
-    stateTaxRate: 3.23,
-    capitalGainsTaxRate: 15,
-    bridgeLoanRate: 7
-  },
-  tax: {
-    capitalGains: 12000,
-    otherIncome: 0,
-    stateRate: 3.23
-  },
-  retirement: {
-    currentAge: 52,
-    retirementAge: 65,
-    annualReturn: 7.0,
-    withdrawalRate: 4.0,
-    additionalAnnualContrib: 0
-  }
-};
-
-let state = loadState();
-let currentPage = "overview";
-let hasUnsavedChanges = false;
-
-const pages = [
-  ["overview", "OD", "Overview Dashboard"],
-  ["reminders", "✅", "Action Reminders"],
-  ["investments", "📈", "투자 포트폴리오"],
-  ["timeline", "TL", "Life Timeline"],
-  ["funding", "🎓", "Tuition Funding"],
-  ["college", "CP", "College Planner"],
-  ["house", "HP", "House Purchase Planner"],
-  ["cashflow", "CF", "Monthly Cash Flow"],
-  ["simulator", "SS", "Scenario Simulator"],
-  ["tax", "TX", "Tax Planning"],
-  ["retirement", "RT", "Retirement Simulator"],
-  ["goals", "GL", "Goals"],
-  ["reports", "RP", "Reports"],
-  ["ai", "🤖", "AI 어드바이저"],
-  ["profile", "⚙", "Family Profile"]
+// Navigation
+const PAGES = [
+  { id: "assets",  icon: "🏠", label: "자산 현황" },
+  { id: "invest",  icon: "📈", label: "투자"       },
+  { id: "goals",   icon: "🎯", label: "목표"       },
+  { id: "ai",      icon: "🤖", label: "AI 상담"    }
 ];
+let currentPage = "assets";
 
-const fieldGroups = {
-  profile: [
-    ["parentName", "Your name", "text"],
-    ["studentName", "Son/daughter name", "text"],
-    ["school", "College / university", "text"],
-    ["parentAge", "Your current age", "number"],
-    ["retirementTargetAge", "Target retirement age", "number"],
-    ["studentStartYear", "Years until college starts", "number"]
-  ],
-  household: [
-    ["monthlyIncome", "Monthly household income", "currency"],
-    ["monthlyExpenses", "Monthly core expenses", "currency"],
-    ["retirementContribution", "Monthly retirement contribution", "currency"],
-    ["collegeMonthlySavings", "Monthly college savings", "currency"],
-    ["cash", "Cash and checking", "currency"],
-    ["investments", "Taxable investments", "currency"],
-    ["retirement", "Retirement accounts", "currency"],
-    ["homeEquity", "Current home equity", "currency"],
-    ["debts", "Debts excluding mortgage", "currency"]
-  ],
-  college: [
-    ["annualCost", "Current Purdue annual cost", "currency"],
-    ["inflationRate", "Annual college inflation", "percent"],
-    ["yearsUntilStart", "Years until son starts", "number"],
-    ["collegeFund", "College fund balance", "currency"],
-    ["annualFamilySupport", "Annual family support target", "currency"],
-    ["studentLoan", "Student loan per year", "currency"]
-  ],
-  house: [
-    ["housePrice", "Target house price", "currency"],
-    ["downPayment", "Down payment", "currency"],
-    ["interestRate", "Mortgage interest rate", "percent"],
-    ["loanYears", "Loan term years", "number"],
-    ["propertyTaxRate", "Property tax rate", "percent"],
-    ["insuranceMonthly", "Monthly insurance", "currency"],
-    ["hoaMonthly", "Monthly HOA", "currency"],
-    ["purchaseDelayYears", "Purchase delay years", "number"]
-  ],
-  scenario: [
-    ["delayHomePurchase", "Delay home purchase by years", "number"],
-    ["housePriceChange", "Change house price", "currency"],
-    ["downPaymentChange", "Change down payment", "currency"],
-    ["collegeSupportChange", "Change annual college support", "currency"],
-    ["studentLoanChange", "Add student loan per year", "currency"],
-    ["interestRateChange", "Change interest rate", "percent"]
-  ],
-  funding: [
-    ["semesterTuition", "학기 등록금 (1학기)", "currency"],
-    ["stockCurrentValue", "주식 현재 가치", "currency"],
-    ["stockCostBasis", "주식 매입 원가 (총액)", "currency"],
-    ["stockExpectedAnnualReturn", "주식 예상 연 수익률 (%)", "percent"],
-    ["useInstallmentPlan", "Installment Plan 사용 (1=예 0=아니오)", "number"],
-    ["monthsUntil59Half", "59½까지 남은 개월 수", "number"],
-    ["ordinaryIncomeTaxRate", "일반소득세율 (연방, %)", "percent"],
-    ["stateTaxRate", "주 소득세율 (%)", "percent"],
-    ["capitalGainsTaxRate", "장기 자본이득세율 (%)", "percent"],
-    ["bridgeLoanRate", "단기 대출 이자율 (%)", "percent"]
-  ],
-  tax: [
-    ["capitalGains", "Annual capital gains", "currency"],
-    ["otherIncome", "Other income (rental, etc.)", "currency"],
-    ["stateRate", "State income tax rate", "percent"]
-  ],
-  retirement: [
-    ["currentAge", "Current age", "number"],
-    ["retirementAge", "Target retirement age", "number"],
-    ["annualReturn", "Expected annual return", "percent"],
-    ["withdrawalRate", "Safe withdrawal rate", "percent"],
-    ["additionalAnnualContrib", "Extra annual contribution", "currency"]
-  ]
-};
-
-function loadState() {
-  try {
-    return mergeDefaults(structuredClone(sampleData), JSON.parse(localStorage.getItem(STORAGE_KEY)) || {});
-  } catch {
-    return structuredClone(sampleData);
-  }
-}
-
-function saveState() {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
-  localStorage.setItem(LAST_SAVED_KEY, new Date().toISOString());
-}
-
-function mergeDefaults(defaults, saved) {
-  Object.entries(saved).forEach(([key, value]) => {
-    if (value && typeof value === "object" && !Array.isArray(value) && defaults[key]) {
-      defaults[key] = mergeDefaults(defaults[key], value);
-    } else {
-      defaults[key] = value;
-    }
+function buildNav() {
+  const nav = document.getElementById("nav");
+  const sel = document.getElementById("mobileNav");
+  PAGES.forEach(p => {
+    const btn = document.createElement("button");
+    btn.className = "nav-btn"; btn.dataset.page = p.id;
+    btn.innerHTML = `<span class="nav-icon">${p.icon}</span><span>${p.label}</span>`;
+    btn.addEventListener("click", () => setPage(p.id));
+    nav.appendChild(btn);
+    const opt = document.createElement("option");
+    opt.value = p.id; opt.textContent = p.label;
+    sel.appendChild(opt);
   });
-  return defaults;
-}
-
-function money(value, compact = false) {
-  return new Intl.NumberFormat("en-US", {
-    style: "currency",
-    currency: "USD",
-    notation: compact ? "compact" : "standard",
-    maximumFractionDigits: 0
-  }).format(value);
-}
-
-function pct(value) {
-  return `${Math.round(value * 10) / 10}%`;
-}
-
-function clamp(value, min, max) {
-  return Math.max(min, Math.min(max, value));
-}
-
-function isSampleValue(group, key) {
-  return state[group]?.[key] === sampleData[group]?.[key];
-}
-
-function formatLastSaved() {
-  const savedAt = localStorage.getItem(LAST_SAVED_KEY);
-  if (!savedAt) return "Saved locally";
-  return `Saved ${new Intl.DateTimeFormat("en-US", { hour: "numeric", minute: "2-digit" }).format(new Date(savedAt))}`;
-}
-
-function setSaveStatus(dirty) {
-  hasUnsavedChanges = dirty;
-  const status = document.getElementById("saveStatus");
-  const button = document.getElementById("saveDataButton");
-  if (!status || !button) return;
-  status.classList.toggle("saved", !dirty);
-  status.textContent = dirty ? "Unsaved changes" : formatLastSaved();
-  button.textContent = dirty ? "Save Changes" : "Saved";
-  button.disabled = !dirty;
-}
-
-function getCalculations(data = state) {
-  const h = data.household;
-  const c = data.college;
-  const house = data.house;
-  const monthlyDebtPayment = h.debts * 0.018;
-  const netWorth = h.cash + h.investments + h.retirement + h.homeEquity - h.debts;
-  const monthlyCashFlow = h.monthlyIncome - h.monthlyExpenses - h.retirementContribution - h.collegeMonthlySavings - monthlyDebtPayment;
-  const emergencyMonths = h.cash / Math.max(h.monthlyExpenses, 1);
-  const savingsRate = ((h.retirementContribution + h.collegeMonthlySavings + Math.max(monthlyCashFlow, 0)) / h.monthlyIncome) * 100;
-  const mortgage = mortgageDetails(house);
-  const dti = ((mortgage.total + monthlyDebtPayment) / h.monthlyIncome) * 100;
-  const collegeRows = collegeProjection(c);
-  const collegeGap = collegeRows.reduce((sum, row) => sum + Math.max(row.gap, 0), 0);
-  const retirementSafety = clamp((h.retirement / 900000) * 70 + savingsRate, 0, 100);
-  const score = Math.round((clamp(emergencyMonths / 8, 0, 1) * 25) + (clamp(36 / Math.max(dti, 1), 0, 1) * 25) + (monthlyCashFlow > 0 ? 20 : 5) + (retirementSafety * 0.3));
-
-  return {
-    monthlyDebtPayment,
-    netWorth,
-    monthlyCashFlow,
-    emergencyMonths,
-    savingsRate,
-    mortgage,
-    dti,
-    collegeRows,
-    collegeGap,
-    retirementSafety,
-    score
-  };
-}
-
-function mortgageDetails(house) {
-  const loan = Math.max(house.housePrice - house.downPayment, 0);
-  const monthlyRate = house.interestRate / 100 / 12;
-  const periods = house.loanYears * 12;
-  const principalInterest = monthlyRate === 0 ? loan / periods : loan * (monthlyRate * (1 + monthlyRate) ** periods) / ((1 + monthlyRate) ** periods - 1);
-  const propertyTax = house.housePrice * (house.propertyTaxRate / 100) / 12;
-  const insurance = house.insuranceMonthly;
-  const hoa = house.hoaMonthly;
-  return {
-    loan,
-    principalInterest,
-    propertyTax,
-    insurance,
-    hoa,
-    total: principalInterest + propertyTax + insurance + hoa
-  };
-}
-
-function collegeProjection(college) {
-  const rows = [];
-  let remainingFund = college.collegeFund;
-  for (let year = 1; year <= 4; year += 1) {
-    const projectedCost = college.annualCost * (1 + college.inflationRate / 100) ** (college.yearsUntilStart + year - 1);
-    const familySupport = Math.min(projectedCost, college.annualFamilySupport + college.studentLoan + Math.max(remainingFund, 0) / (5 - year));
-    const gap = projectedCost - familySupport;
-    remainingFund -= Math.max(familySupport - college.annualFamilySupport - college.studentLoan, 0);
-    rows.push({ year, projectedCost, familySupport, gap });
-  }
-  return rows;
-}
-
-function scenarioState() {
-  const copy = structuredClone(state);
-  copy.house.purchaseDelayYears += state.scenario.delayHomePurchase;
-  copy.house.housePrice += state.scenario.housePriceChange;
-  copy.house.downPayment += state.scenario.downPaymentChange;
-  copy.house.interestRate += state.scenario.interestRateChange;
-  copy.college.annualFamilySupport += state.scenario.collegeSupportChange;
-  copy.college.studentLoan += state.scenario.studentLoanChange;
-  return copy;
-}
-
-function riskAlerts(calc) {
-  const alerts = [];
-  alerts.push({
-    label: "Emergency fund",
-    text: calc.emergencyMonths < 6 ? "Build toward 6 months before major purchases." : "Liquidity is above the 6-month protection target.",
-    color: calc.emergencyMonths < 6 ? "var(--amber)" : "var(--green)"
-  });
-  alerts.push({
-    label: "Debt-to-income",
-    text: calc.dti > 43 ? "DTI is above typical underwriting comfort." : calc.dti > 36 ? "DTI is workable but tight." : "DTI is in a comfortable range.",
-    color: calc.dti > 43 ? "var(--red)" : calc.dti > 36 ? "var(--amber)" : "var(--green)"
-  });
-  alerts.push({
-    label: "Cash flow",
-    text: calc.monthlyCashFlow < 0 ? "Monthly cash flow is negative." : "Monthly cash flow remains positive.",
-    color: calc.monthlyCashFlow < 0 ? "var(--red)" : "var(--green)"
-  });
-  alerts.push({
-    label: "Retirement",
-    text: calc.retirementSafety < 70 ? "Avoid reducing retirement contributions." : "Retirement protection looks steady.",
-    color: calc.retirementSafety < 70 ? "var(--amber)" : "var(--green)"
-  });
-  return alerts;
-}
-
-function renderFunding() {
-  const f = state.funding;
-  const tuition = f.semesterTuition;
-  const gain = Math.max(0, f.stockCurrentValue - f.stockCostBasis);
-  const gainPct = f.stockCurrentValue > 0 ? gain / f.stockCurrentValue : 0;
-  const months = f.monthsUntil59Half;
-  const fedRate = f.ordinaryIncomeTaxRate / 100;
-  const stateRate = f.stateTaxRate / 100;
-  const cgRate = f.capitalGainsTaxRate / 100;
-  const combinedOrdinary = fedRate + stateRate;
-  const useInstall = f.useInstallmentPlan === 1;
-
-  // Stock opportunity cost: what you LOSE if you sell now vs hold
-  const monthlyStockReturn = f.stockExpectedAnnualReturn / 100 / 12;
-  const stockOpportunityCost = tuition * monthlyStockReturn * months; // simplified
-
-  // ── Option A: Sell stocks now (full semester) ──
-  const stockGainOnTuition = tuition * gainPct;
-  const optA_cgTax = stockGainOnTuition * cgRate;
-  const optA_opportunity = stockOpportunityCost;
-  const optA_total = optA_cgTax; // hard cost
-  const optA_allIn = optA_cgTax + optA_opportunity;
-
-  // ── Option B: 401k now (with 10% penalty) ──
-  const grossNeededB = tuition / (1 - combinedOrdinary - 0.10);
-  const optB_tax = grossNeededB * combinedOrdinary;
-  const optB_penalty = grossNeededB * 0.10;
-  const optB_total = optB_tax + optB_penalty;
-
-  // ── Option C: 401k after 59½ (no penalty) ──
-  const grossNeededC = tuition / (1 - combinedOrdinary);
-  const optC_tax = grossNeededC * combinedOrdinary;
-  const optC_bridgeCost = useInstall ? 0 : tuition * (f.bridgeLoanRate / 100) * (months / 12);
-  const optC_total = optC_tax + optC_bridgeCost;
-
-  // ── Option D: 401k Loan ──
-  const optD_fee = 50; // typical plan fee
-  const optD_loanInterest = tuition * 0.055 * (5 / 12); // prime+1 for ~5mo average
-  const optD_total = optD_fee; // interest goes back to self, so not a real cost
-
-  // ── Option E: Installment + hybrid (best combo) ──
-  // Pay installments 1-2 from stocks (smaller amount), 3-4 from 401k post-59½
-  const installAmt = tuition / 4;
-  const stockInstallments = Math.min(2, Math.ceil(months / 1.5)); // how many install before 59½
-  const k401Installments = 4 - stockInstallments;
-  const stockAmtNeeded = installAmt * stockInstallments;
-  const k401AmtNeeded = installAmt * k401Installments;
-  const optE_cgTax = stockAmtNeeded * gainPct * cgRate;
-  const grossK401 = k401AmtNeeded / (1 - combinedOrdinary);
-  const optE_k401Tax = grossK401 * combinedOrdinary;
-  const optE_installFee = 35;
-  const optE_total = optE_cgTax + optE_k401Tax + optE_installFee;
-  const optE_opportunity = stockAmtNeeded * monthlyStockReturn * months;
-
-  const options = [
-    {
-      id: "A", emoji: "📈",
-      label: "주식 전액 매도",
-      hardCost: optA_cgTax,
-      opportunity: optA_opportunity,
-      penalty: 0,
-      total: optA_allIn,
-      detail: `자본이득세 ${money(optA_cgTax)} + ${months}개월 기회비용 ${money(optA_opportunity)}`,
-      note: "주식 오를수록 손해. 시장이 약세면 유리.",
-      color: "#276ef1"
-    },
-    {
-      id: "B", emoji: "❌",
-      label: "401k 즉시 인출 (페널티)",
-      hardCost: optB_tax,
-      opportunity: 0,
-      penalty: optB_penalty,
-      total: optB_total,
-      detail: `소득세 ${money(optB_tax)} + 페널티 ${money(optB_penalty)}`,
-      note: `10월까지 ${months}개월만 기다리면 $${Math.round(optB_penalty/100)*100} 절약. 절대 비추.`,
-      color: "#d94b4b"
-    },
-    {
-      id: "C", emoji: "⏳",
-      label: `401k 10월 이후 인출 (59½)`,
-      hardCost: optC_tax,
-      opportunity: 0,
-      penalty: 0,
-      total: optC_total,
-      detail: `소득세만 ${money(optC_tax)}${optC_bridgeCost > 0 ? ` + 브릿지 이자 ${money(optC_bridgeCost)}` : ""}`,
-      note: "Installment Plan 사용하면 브릿지 불필요.",
-      color: "#d99000"
-    },
-    {
-      id: "D", emoji: "🏦",
-      label: "401k 론 (빌리기)",
-      hardCost: optD_fee,
-      opportunity: 0,
-      penalty: 0,
-      total: optD_fee,
-      detail: `수수료 ~${money(optD_fee)}, 이자는 본인에게 돌아옴`,
-      note: "플랜이 허용하면 가장 저렴. HR에 확인 필수.",
-      color: "#19a974"
-    },
-    {
-      id: "E", emoji: "🏆",
-      label: "Installment + 주식 일부 + 401k 조합",
-      hardCost: optE_cgTax + optE_k401Tax,
-      opportunity: optE_opportunity,
-      penalty: 0,
-      total: optE_total + optE_opportunity,
-      detail: `주식 ${stockInstallments}회차분 ${money(stockAmtNeeded)} + 401k ${k401Installments}회차분 (페널티 없음) + 수수료 $35`,
-      note: "세금 최소화 + 401k 페널티 회피 + 주식 일부 보존.",
-      color: "#7c5cff"
-    }
-  ];
-
-  const sorted = [...options].sort((a, b) => a.total - b.total);
-  const best = sorted[0];
-  document.getElementById("fundingBestLabel").textContent = `최선: Option ${best.id}`;
-
-  document.getElementById("fundingOptions").innerHTML = options.map(opt => {
-    const isBest = opt.id === best.id;
-    return `
-      <div style="
-        padding:16px;border-radius:10px;
-        border:2px solid ${isBest ? opt.color : "var(--line)"};
-        background:${isBest ? "#f8f9ff" : "#fbfcfe"};
-        display:grid;gap:8px;
-      ">
-        <div style="display:flex;align-items:center;justify-content:space-between;gap:10px">
-          <div style="display:flex;align-items:center;gap:10px">
-            <span style="font-size:20px">${opt.emoji}</span>
-            <strong style="font-size:15px">${opt.label}</strong>
-            ${isBest ? `<span style="padding:3px 10px;border-radius:999px;background:${opt.color};color:white;font-size:11px;font-weight:800">추천</span>` : ""}
-          </div>
-          <strong style="font-size:22px;color:${opt.color}">${money(opt.total)}</strong>
-        </div>
-        <div style="font-size:13px;color:var(--muted)">${opt.detail}</div>
-        <div style="font-size:12px;padding:8px 10px;border-radius:6px;background:${isBest ? opt.color + "18" : "#f5f7fb"};color:var(--ink)">
-          💡 ${opt.note}
-        </div>
-        <div style="display:flex;gap:16px;font-size:12px;color:var(--muted)">
-          <span>세금/페널티: <strong style="color:var(--ink)">${money(opt.hardCost + opt.penalty)}</strong></span>
-          ${opt.opportunity > 0 ? `<span>기회비용: <strong style="color:var(--amber)">${money(opt.opportunity)}</strong></span>` : ""}
-        </div>
-      </div>
-    `;
-  }).join("");
-
-  // Stock scenario chart: show total cost at different stock return scenarios
-  const scenarios = [-20, -10, 0, 10, 20, 30, 40];
-  const scenarioLabels = scenarios.map(s => `${s > 0 ? "+" : ""}${s}%`);
-  const sellNowCosts = scenarios.map(() => optA_cgTax); // tax is same regardless of future
-  const holdCosts = scenarios.map(s => {
-    const futureStockValue = f.stockCurrentValue * (1 + s / 100);
-    const futureGain = Math.max(0, futureStockValue - f.stockCostBasis);
-    const futureCgTax = (futureGain / futureStockValue) * tuition * cgRate;
-    return futureCgTax;
-  });
-  const hybridCosts = scenarios.map(s => {
-    const futureStockValue = f.stockCurrentValue * (1 + s / 100);
-    const futureGain = Math.max(0, futureStockValue - f.stockCostBasis);
-    const futureCgTax = (futureGain / futureStockValue) * stockAmtNeeded * cgRate;
-    return futureCgTax + optE_k401Tax + optE_installFee;
-  });
-  drawChart("fundingChart", [
-    { name: "주식 전액 매도 비용", values: sellNowCosts, color: "#276ef1" },
-    { name: "조합 전략 비용 (E)", values: hybridCosts, color: "#7c5cff" },
-    { name: "401k 인출 후 주식매도 비용", values: holdCosts, color: "#19a974" }
-  ], scenarioLabels);
-
-  // Recommendation text
-  const stockUp = f.stockExpectedAnnualReturn > 10;
-  document.getElementById("fundingRecommendation").innerHTML = `
-    <strong>📊 현재 상황 분석 (주식 예상 수익률 ${f.stockExpectedAnnualReturn}%/년 기준)</strong><br><br>
-    ${stockUp
-      ? `주식이 강세라면 <strong>지금 전액 매도는 기회비용 손실</strong>이 커요. Installment Plan으로 납부를 분산하고, 10월 59½ 이후 401k에서 페널티 없이 인출하는 조합(Option E)이 가장 유리합니다.`
-      : `주식 수익률이 낮거나 시장이 불확실하다면 <strong>지금 주식 일부 매도</strong>가 오히려 현명할 수 있어요. 자본이득세(${f.capitalGainsTaxRate}%)는 401k 소득세(${f.ordinaryIncomeTaxRate}%)보다 낮아요.`
-    }<br><br>
-    <strong>✅ 지금 당장 할 일:</strong><br>
-    1. Purdue MyPurdue → Student Account → Installment Plan 등록 (마감: 보통 8월 초)<br>
-    2. 직장 401k 플랜 포털 또는 HR에 <strong>Loan provision 여부</strong> 확인<br>
-    3. 주식 계좌에서 1~2회차 분 (${money(installAmt * stockInstallments)}) 만 일부 매도 준비<br>
-    4. 10월 이후 401k에서 나머지 ${money(k401AmtNeeded)} 인출 (페널티 없음)
-  `;
-
-  // Installment table
-  const installMonths = ["8월 (1회차)", "9월 (2회차)", "10월 (3회차)", "11월 (4회차)"];
-  const installSources = [];
-  for (let i = 0; i < 4; i++) {
-    const monthFromNow = i + (6 - months); // approximate
-    const past59half = (months - (i * 1)) <= 0;
-    if (past59half || i >= stockInstallments) {
-      installSources.push({ source: "401k 인출 (59½ 이후)", tax: installAmt * combinedOrdinary, penalty: 0, color: "#19a974" });
-    } else {
-      installSources.push({ source: "주식 매도", tax: installAmt * gainPct * cgRate, penalty: 0, color: "#276ef1" });
-    }
-  }
-  document.getElementById("installmentTable").innerHTML = installMonths.map((m, i) => {
-    const src = installSources[i];
-    return `
-      <tr>
-        <td>${i + 1}회차</td>
-        <td>${m}</td>
-        <td>${money(installAmt)}</td>
-        <td style="color:${src.color};font-weight:700">${src.source}</td>
-        <td>${money(src.tax)}</td>
-        <td style="color:${src.penalty > 0 ? "var(--red)" : "var(--green)"}">${src.penalty > 0 ? money(src.penalty) : "없음 ✅"}</td>
-      </tr>
-    `;
-  }).join("");
-
-  const totalTax = installSources.reduce((s, r) => s + r.tax, 0);
-  document.getElementById("installmentTotals").innerHTML = `
-    <div><span>총 등록금</span><strong>${money(tuition)}</strong></div>
-    <div><span>총 세금 비용</span><strong style="color:var(--amber)">${money(totalTax)}</strong></div>
-    <div><span>절약 vs 401k 조기인출</span><strong style="color:var(--green)">${money(optB_total - optE_total)}</strong></div>
-  `;
-}
-
-function federalTax(taxableIncome) {
-  const brackets = [
-    [23200, 0.10],
-    [94300, 0.12],
-    [201050, 0.22],
-    [383900, 0.24],
-    [487450, 0.32],
-    [731200, 0.35],
-    [Infinity, 0.37]
-  ];
-  let tax = 0;
-  let prev = 0;
-  for (const [ceiling, rate] of brackets) {
-    if (taxableIncome <= prev) break;
-    tax += (Math.min(taxableIncome, ceiling) - prev) * rate;
-    prev = ceiling;
-  }
-  return tax;
-}
-
-function getTaxCalculations() {
-  const h = state.household;
-  const t = state.tax;
-  const annualIncome = h.monthlyIncome * 12;
-  const annualRetirement = h.retirementContribution * 12;
-  const standardDeduction = 29200;
-  const grossIncome = annualIncome + t.capitalGains + t.otherIncome;
-  const taxableIncome = Math.max(0, grossIncome - standardDeduction - annualRetirement);
-  const ordinaryIncome = Math.max(0, taxableIncome - t.capitalGains);
-  const baseTax = federalTax(ordinaryIncome);
-  const cgRate = ordinaryIncome > 94050 ? 0.20 : ordinaryIncome > 0 ? 0.15 : 0;
-  const cgTax = t.capitalGains * cgRate;
-  const totalFederal = baseTax + cgTax;
-  const stateTax = grossIncome * (t.stateRate / 100);
-  const ficaTax = Math.min(annualIncome, 168600) * 0.062 + annualIncome * 0.0145;
-  const totalTax = totalFederal + stateTax + ficaTax;
-  const effectiveRate = grossIncome > 0 ? (totalFederal / grossIncome) * 100 : 0;
-  const marginalRate = taxableIncome > 487450 ? 37 : taxableIncome > 383900 ? 35 : taxableIncome > 201050 ? 32 : taxableIncome > 94300 ? 24 : taxableIncome > 23200 ? 22 : 12;
-  return { grossIncome, taxableIncome, totalFederal, stateTax, ficaTax, totalTax, effectiveRate, marginalRate, cgTax, quarterly: totalFederal / 4 };
-}
-
-function getRetirementCalculations() {
-  const h = state.household;
-  const r = state.retirement;
-  const yearsLeft = Math.max(0, r.retirementAge - r.currentAge);
-  const annualContrib = h.retirementContribution * 12 + r.additionalAnnualContrib;
-  const growthRate = r.annualReturn / 100;
-  let balance = h.retirement;
-  const projections = [];
-  for (let y = 0; y <= yearsLeft; y += 1) {
-    projections.push({ year: y, balance });
-    balance = balance * (1 + growthRate) + annualContrib;
-  }
-  const projectedBalance = projections[projections.length - 1].balance;
-  const annualWithdrawal = projectedBalance * (r.withdrawalRate / 100);
-  const monthlyWithdrawal = annualWithdrawal / 12;
-  const coverageYears = annualWithdrawal > 0 ? Math.floor(projectedBalance / annualWithdrawal) : 999;
-  return { yearsLeft, projectedBalance, annualWithdrawal, monthlyWithdrawal, coverageYears, projections };
-}
-
-function renderTax() {
-  const t = getTaxCalculations();
-  document.getElementById("taxTotal").textContent = money(t.totalFederal);
-  document.getElementById("taxEffectiveRate").textContent = `Effective rate: ${pct(t.effectiveRate)}`;
-  document.getElementById("taxMarginalRate").textContent = `${t.marginalRate}%`;
-  document.getElementById("taxMarginalLabel").textContent = "Top bracket (MFJ 2024)";
-  document.getElementById("taxGrossIncome").textContent = money(t.grossIncome);
-  document.getElementById("taxTaxableIncome").textContent = money(t.taxableIncome);
-  document.getElementById("taxQuarterly").textContent = money(t.quarterly);
-
-  const maxTax = Math.max(t.totalFederal, t.stateTax, t.ficaTax, 1);
-  drawChart("taxChart", [
-    { name: "Federal income", values: [t.totalFederal - t.cgTax], color: "#276ef1" },
-    { name: "Capital gains tax", values: [t.cgTax], color: "#7c5cff" },
-    { name: "State tax", values: [t.stateTax], color: "#14b8c4" },
-    { name: "FICA", values: [t.ficaTax], color: "#19a974" }
-  ], ["Tax components"], { legend: true });
-
-  const tip = t.effectiveRate < 18
-    ? `Effective rate of ${pct(t.effectiveRate)} is moderate. Maximize 401k contributions (${money(Math.min(state.household.retirementContribution * 12, 30500))} limit if 50+) to reduce taxable income further.`
-    : t.effectiveRate < 24
-      ? `At ${pct(t.effectiveRate)} effective rate, tax-loss harvesting in taxable investments and HSA contributions (if eligible) are worth exploring.`
-      : `High effective rate of ${pct(t.effectiveRate)}. Consider Roth conversion ladder planning and maximizing deductible accounts before year-end.`;
-  document.getElementById("taxRecommendation").textContent = tip;
-}
-
-function renderRetirement() {
-  const r = getRetirementCalculations();
-  document.getElementById("retirementBalance").textContent = money(r.projectedBalance, true);
-  document.getElementById("retirementYearsLabel").textContent = `${r.yearsLeft} years of growth`;
-  document.getElementById("retirementWithdrawal").textContent = money(r.annualWithdrawal, true);
-  document.getElementById("retirementCoverageLabel").textContent = `at ${state.retirement.withdrawalRate}% withdrawal`;
-  document.getElementById("retirementYearsLeft").textContent = `${r.yearsLeft} yrs`;
-  document.getElementById("retirementMonthly").textContent = money(r.monthlyWithdrawal);
-  document.getElementById("retirementCoverageYears").textContent = r.coverageYears >= 99 ? "30+ yrs" : `${r.coverageYears} yrs`;
-
-  const labels = r.projections.filter((_, i) => i % Math.max(1, Math.floor(r.projections.length / 8)) === 0 || i === r.projections.length - 1).map(p => `Age ${state.retirement.currentAge + p.year}`);
-  const values = r.projections.filter((_, i) => i % Math.max(1, Math.floor(r.projections.length / 8)) === 0 || i === r.projections.length - 1).map(p => p.balance);
-  drawChart("retirementChart", [
-    { name: "Retirement balance", values, color: "#276ef1" }
-  ], labels, { legend: false });
-
-  const tip = r.coverageYears >= 30
-    ? `At ${pct(state.retirement.withdrawalRate)} withdrawal, your ${money(r.projectedBalance, true)} projected balance provides strong coverage for 30+ years. Focus on reducing sequence-of-returns risk near retirement.`
-    : r.coverageYears >= 20
-      ? `Projected coverage of ${r.coverageYears} years is workable. Consider increasing contributions by ${money(5000)}/year or delaying retirement by 1-2 years to reach a 30-year safety margin.`
-      : `Projected coverage of ${r.coverageYears} years is below the 25-30 year target. Increase retirement contributions, reduce the withdrawal rate, or push back the retirement date to close the gap.`;
-  document.getElementById("retirementRecommendation").textContent = tip;
-}
-
-function getTimelineRows() {
-  const h = state.household;
-  const c = state.college;
-  const house = state.house;
-  const p = state.profile;
-  const r = state.retirement;
-  const rows = [];
-  const yearsToShow = Math.max(p.retirementTargetAge - p.parentAge + 2, 20);
-  let cash = h.cash;
-  let retirBalance = h.retirement;
-  const annualSurplus = (h.monthlyIncome - h.monthlyExpenses - h.retirementContribution - h.collegeMonthlySavings) * 12;
-  const retirGrowth = (state.retirement.annualReturn || 7) / 100;
-  const mortgage = mortgageDetails(house);
-
-  for (let yr = 0; yr < yearsToShow; yr += 1) {
-    const age = p.parentAge + yr;
-    const events = [];
-    let collegeCost = 0;
-    const collegeYear = yr - p.studentStartYear;
-    if (collegeYear >= 0 && collegeYear < 4) {
-      collegeCost = c.annualCost * (1 + c.inflationRate / 100) ** (p.studentStartYear + collegeYear);
-      events.push(`College yr ${collegeYear + 1}`);
-    }
-    let mortgageAnnual = 0;
-    if (yr >= house.purchaseDelayYears) {
-      if (yr === house.purchaseDelayYears) {
-        cash -= house.downPayment;
-        events.push("House purchase");
-      }
-      mortgageAnnual = mortgage.total * 12;
-    }
-    const savingsAdded = Math.max(annualSurplus - mortgageAnnual - collegeCost, 0);
-    cash += savingsAdded - Math.max(collegeCost - c.annualFamilySupport - c.studentLoan, 0);
-    retirBalance = retirBalance * (1 + retirGrowth) + h.retirementContribution * 12;
-    if (age === p.retirementTargetAge) events.push("Retirement");
-    rows.push({ yr, age, events, collegeCost, mortgageAnnual, savingsAdded, cash, retirBalance });
-  }
-  return rows;
-}
-
-function renderTimeline() {
-  const rows = getTimelineRows();
-  const p = state.profile;
-  const house = state.house;
-  const c = state.college;
-
-  // summary cards
-  const collegeStartAge = p.parentAge + p.studentStartYear;
-  const houseAge = p.parentAge + house.purchaseDelayYears;
-  const retirRow = rows.find(r => r.age === p.retirementTargetAge) || rows[rows.length - 1];
-  const collegeEndRow = rows.find(r => r.age === collegeStartAge + 3) || {};
-
-  document.getElementById("timelineCards").innerHTML = [
-    {
-      status: `Age ${collegeStartAge}–${collegeStartAge + 3}`,
-      color: "var(--amber)",
-      title: `${state.profile.school} starts in ${p.studentStartYear} yr${p.studentStartYear !== 1 ? "s" : ""}`,
-      body: `4-year projected family cost is ${money(c.annualCost * 4 * (1 + c.inflationRate / 100) ** p.studentStartYear, true)}. Current college fund covers the plan with ${money(state.college.collegeFund)} saved.`,
-      facts: [["Fund balance", money(state.college.collegeFund)], ["Annual support", money(c.annualFamilySupport)], ["Student loan/yr", money(c.studentLoan)]]
-    },
-    {
-      status: `Age ${houseAge}`,
-      color: "var(--blue)",
-      title: `Home purchase planned in ${house.purchaseDelayYears} yr${house.purchaseDelayYears !== 1 ? "s" : ""}`,
-      body: `Down payment of ${money(house.downPayment)} leaves ${money(state.household.cash - house.downPayment)} in cash. Monthly PITI+HOA: ${money(mortgageDetails(house).total)}.`,
-      facts: [["House price", money(house.housePrice)], ["Down payment", money(house.downPayment)], ["Monthly cost", money(mortgageDetails(house).total)]]
-    },
-    {
-      status: `Age ${p.retirementTargetAge}`,
-      color: "var(--green)",
-      title: `Retirement in ${p.retirementTargetAge - p.parentAge} years`,
-      body: `Projected retirement balance is ${money(retirRow.retirBalance, true)}. At 4% withdrawal that is ${money(retirRow.retirBalance * 0.04, true)}/yr or ${money(retirRow.retirBalance * 0.04 / 12)}/mo.`,
-      facts: [["Projected balance", money(retirRow.retirBalance, true)], ["Annual withdrawal", money(retirRow.retirBalance * 0.04, true)], ["Monthly income", money(retirRow.retirBalance * 0.04 / 12)]]
-    }
-  ].map(card => `
-    <article class="decision-card">
-      <span class="decision-status" style="background:${card.color}">${card.status}</span>
-      <h3>${card.title}</h3>
-      <p>${card.body}</p>
-      <div class="decision-facts">
-        ${card.facts.map(([l, v]) => `<div><span>${l}</span><strong>${v}</strong></div>`).join("")}
-      </div>
-    </article>
-  `).join("");
-
-  // table
-  document.getElementById("timelineTable").innerHTML = rows.map(row => `
-    <tr style="${row.events.includes("Retirement") ? "font-weight:800;background:#eaf8f2" : row.events.some(e => e.startsWith("College")) ? "background:#fffaf0" : row.events.includes("House purchase") ? "background:#f2f7ff" : ""}">
-      <td>+${row.yr} yr</td>
-      <td>Age ${row.age}</td>
-      <td>${row.events.join(", ") || "—"}</td>
-      <td>${row.collegeCost > 0 ? money(row.collegeCost) : "—"}</td>
-      <td>${row.mortgageAnnual > 0 ? money(row.mortgageAnnual) : "—"}</td>
-      <td>${money(row.savingsAdded)}</td>
-      <td style="color:${row.cash < 0 ? "var(--red)" : "var(--green)"}">${money(row.cash)}</td>
-    </tr>
-  `).join("");
-
-  // chart: cash + retirement balance over years
-  const visibleRows = rows.filter((_, i) => i % 2 === 0 || rows[i].events.length > 0);
-  drawChart("timelineChart", [
-    { name: "Cash reserve", values: visibleRows.map(r => Math.max(r.cash, 0)), color: "#276ef1" },
-    { name: "Retirement balance", values: visibleRows.map(r => r.retirBalance / 5), color: "#19a974" }
-  ], visibleRows.map(r => `${r.age}`));
-}
-
-function renderProfile() {
-  // profile form is rendered by renderForms() via data-form="profile"
-  // income fields rendered inline
-  const incomeFields = [
-    ["monthlyIncome", "Monthly household income", "currency"],
-    ["monthlyExpenses", "Monthly core expenses", "currency"],
-    ["retirementContribution", "Monthly retirement contribution", "currency"],
-    ["collegeMonthlySavings", "Monthly college savings", "currency"]
-  ];
-  const container = document.querySelector(".profile-income-grid");
-  if (!container || container.childElementCount > 0) return;
-  container.style.display = "grid";
-  container.style.gap = "12px";
-  incomeFields.forEach(([key, label, type]) => {
-    const field = document.createElement("div");
-    field.className = `field${isSampleValue("household", key) ? "" : " changed"}`;
-    const value = state.household[key];
-    field.innerHTML = `
-      <label for="profile-hh-${key}">
-        <span>${label}</span>
-        <span data-field-value>${money(value)}</span>
-      </label>
-      <input id="profile-hh-${key}" inputmode="decimal" type="number" step="1" value="${value}" />
-    `;
-    field.querySelector("input").addEventListener("input", event => {
-      const nextValue = Number(event.target.value) || 0;
-      state.household[key] = nextValue;
-      field.classList.toggle("changed", !isSampleValue("household", key));
-      field.querySelector("[data-field-value]").textContent = money(nextValue);
-      setSaveStatus(true);
-      renderAll(false);
-    });
-    container.appendChild(field);
-  });
-}
-
-function renderNav() {
-  const desktop = document.getElementById("desktopNav");
-  const mobile = document.getElementById("mobileNav");
-  desktop.innerHTML = "";
-  mobile.innerHTML = "";
-
-  pages.forEach(([id, icon, label]) => {
-    const button = document.createElement("button");
-    button.type = "button";
-    button.className = "nav-button";
-    button.dataset.page = id;
-    button.innerHTML = `<span class="nav-icon">${icon}</span><span>${label}</span>`;
-    button.addEventListener("click", () => setPage(id));
-    desktop.appendChild(button);
-
-    const option = document.createElement("option");
-    option.value = id;
-    option.textContent = label;
-    mobile.appendChild(option);
-  });
-
-  mobile.addEventListener("change", event => setPage(event.target.value));
+  sel.addEventListener("change", e => setPage(e.target.value));
 }
 
 function setPage(id) {
   currentPage = id;
-  document.body.dataset.page = id;
-  document.querySelectorAll(".page").forEach(page => page.classList.toggle("active", page.id === `page-${id}`));
-  document.querySelectorAll(".nav-button").forEach(button => button.classList.toggle("active", button.dataset.page === id));
+  document.querySelectorAll(".page").forEach(p => p.classList.toggle("active", p.id === "page-" + id));
+  document.querySelectorAll(".nav-btn").forEach(b => b.classList.toggle("active", b.dataset.page === id));
   document.getElementById("mobileNav").value = id;
-  document.getElementById("pageTitle").textContent = document.getElementById(`page-${id}`).dataset.pageTitle;
-  renderAll();
+  const pg = document.getElementById("page-" + id);
+  document.getElementById("pageLabel").textContent = pg.dataset.label;
+  document.getElementById("pageTitle").textContent = pg.dataset.title;
+  render();
   if (id === "ai") initAiPage();
-  if (id === "investments") renderInvestments();
 }
 
-function renderForms() {
-  Object.entries(fieldGroups).forEach(([group, fields]) => {
-    const container = document.querySelector(`[data-form="${group}"]`);
-    if (!container) return;
-    container.innerHTML = "";
-    fields.forEach(([key, label, type]) => {
-      const field = document.createElement("div");
-      field.className = `field${isSampleValue(group, key) ? "" : " changed"}`;
-      const value = state[group][key];
-      if (type === "text") {
-        field.innerHTML = `
-          <label for="${group}-${key}"><span>${label}</span></label>
-          <input id="${group}-${key}" type="text" value="${value}" style="font-weight:700" />
-        `;
-        field.querySelector("input").addEventListener("input", event => {
-          state[group][key] = event.target.value;
-          setSaveStatus(true);
-          renderAll(false);
-        });
-      } else {
-        field.innerHTML = `
-          <label for="${group}-${key}">
-            <span>${label}</span>
-            <span data-field-value>${type === "percent" ? pct(value) : type === "currency" ? money(value, Math.abs(value) >= 100000) : value}</span>
-          </label>
-          <input id="${group}-${key}" inputmode="decimal" type="number" step="${type === "percent" ? "0.01" : "1"}" value="${value}" />
-        `;
-        field.querySelector("input").addEventListener("input", event => {
-          const nextValue = Number(event.target.value) || 0;
-          state[group][key] = nextValue;
-          field.classList.toggle("changed", !isSampleValue(group, key));
-          field.querySelector("[data-field-value]").textContent =
-            type === "percent" ? pct(nextValue) : type === "currency" ? money(nextValue, Math.abs(nextValue) >= 100000) : nextValue;
-          setSaveStatus(true);
-          renderAll(false);
-        });
-      }
-      container.appendChild(field);
-    });
-  });
+// Calculations
+function calcStockTotal(stocks) {
+  return stocks.reduce((s, x) => s + x.shares * x.currentPrice, 0);
+}
+function calcNetWorth(stocks) {
+  return S.cash + calcStockTotal(stocks) + S.k401 + S.ira + S.homeEquity - S.debts;
+}
+function calcMortgage() {
+  const loan = Math.max(S.housePrice - S.houseDown, 0);
+  const r = S.houseRate / 100 / 12;
+  const n = S.houseTerm * 12;
+  const pi = r === 0 ? loan / n : loan * r * (1+r)**n / ((1+r)**n - 1);
+  const tax = S.housePrice * S.houseTax / 100 / 12;
+  return { pi, tax, ins: S.houseInsurance, hoa: S.houseHoa, total: pi + tax + S.houseInsurance + S.houseHoa, loan };
+}
+function calcCashFlow() {
+  return S.income - S.expenses - S.k401Contrib - S.collegeSave;
+}
+function calcAllocation(stocks) {
+  const stockVal = calcStockTotal(stocks);
+  const k401S = S.k401Funds.filter(f=>f.type==="stock").reduce((s,f)=>s+S.k401*f.pct/100,0);
+  const k401B = S.k401Funds.filter(f=>f.type==="bond" ).reduce((s,f)=>s+S.k401*f.pct/100,0);
+  const k401C = S.k401Funds.filter(f=>f.type==="cash" ).reduce((s,f)=>s+S.k401*f.pct/100,0);
+  const iraS  = S.iraFunds.filter(f=>f.type==="stock").reduce((s,f)=>s+S.ira*f.pct/100,0);
+  const iraB  = S.iraFunds.filter(f=>f.type==="bond" ).reduce((s,f)=>s+S.ira*f.pct/100,0);
+  const tS = k401S+iraS+stockVal, tB = k401B+iraB, tC = k401C+S.cash;
+  const total = tS+tB+tC;
+  return { stocksPct:total?tS/total*100:0, bondsPct:total?tB/total*100:0, cashPct:total?tC/total*100:0, totalStocks:tS, totalBonds:tB, totalCash:tC, total };
 }
 
-function renderMetrics(calc) {
-  const metrics = [
-    ["Net Worth", money(calc.netWorth, true), "Assets minus debts"],
-    ["Cash Available", money(state.household.cash, true), "Local reserve for goals"],
-    ["Emergency Fund Months", calc.emergencyMonths.toFixed(1), "Target: 6 to 9 months"],
-    ["College Fund Status", money(Math.max(0, state.college.collegeFund - calc.collegeGap), true), "After projected gaps"],
-    ["Mortgage Readiness", pct(clamp(100 - (calc.dti - 25) * 3, 0, 100)), "Based on payment load"],
-    ["Monthly Cash Flow", money(calc.monthlyCashFlow), "After savings and debt"],
-    ["Retirement Safety", pct(calc.retirementSafety), "Balance plus savings rate"],
-    ["Overall Score", `${calc.score}/100`, "Decision confidence"]
-  ];
-
-  document.getElementById("metricGrid").innerHTML = metrics.map(item => `
-    <article class="metric-card">
-      <span>${item[0]}</span>
-      <strong>${item[1]}</strong>
-      <small>${item[2]}</small>
-    </article>
-  `).join("");
-}
-
-function renderDecisions(calc) {
-  const baseReserve = state.household.cash - state.house.downPayment;
-  const cashFlowAfterMortgage = calc.monthlyCashFlow - calc.mortgage.total;
-  const reserveMonthsAfterPurchase = baseReserve / Math.max(state.household.monthlyExpenses, 1);
-  const collegeCovered = calc.collegeGap <= 5000;
-  const taxableAssets = state.household.cash + state.household.investments;
-  const retirementProtected = calc.retirementSafety >= 80 && state.household.retirementContribution > 0;
-  const reserveTarget = state.household.monthlyExpenses * 6;
-
-  const home = baseReserve < reserveTarget || cashFlowAfterMortgage < 0 || calc.dti > 36
-    ? {
-        status: "Wait",
-        color: "var(--red)",
-        title: "Do not rush the home purchase",
-        body: "Current numbers suggest buying now would pressure cash reserves or monthly cash flow. Use the simulator to test a lower price, larger cash reserve, or a later purchase date."
-      }
-    : {
-        status: "Ready",
-        color: "var(--green)",
-        title: "Home purchase looks workable",
-        body: "The purchase plan keeps reserves, cash flow, and DTI inside the v1 comfort range. Still compare rates and closing costs before committing."
-      };
-
-  const college = collegeCovered
-    ? {
-        status: "On track",
-        color: "var(--green)",
-        title: "Purdue plan is mostly covered",
-        body: "The current college fund, annual support target, and student loan assumption cover the projected 4-year plan. Keep this bucket separate from home down payment cash."
-      }
-    : {
-        status: "Gap",
-        color: "var(--amber)",
-        title: "Purdue needs a funding decision",
-        body: "There is still a projected gap. Decide whether Terry will increase annual support, use more cash, add student loan amount, or reduce house timing pressure."
-      };
-
-  const investment = retirementProtected && calc.savingsRate >= 20
-    ? {
-        status: "Protect",
-        color: "var(--blue)",
-        title: "Keep retirement separate from house and college",
-        body: "The v1 priority is not chasing returns. Keep emergency cash safe, keep Purdue cash planned, and avoid using retirement assets to solve house timing."
-      }
-    : {
-        status: "Review",
-        color: "var(--amber)",
-        title: "Review investment and retirement balance",
-        body: "Retirement protection or savings rate is below the v1 comfort range. Before buying a house, protect monthly retirement contributions and avoid overusing taxable investments."
-      };
-
-  const cards = [
-    {
-      ...home,
-      facts: [
-        ["Cash after down payment", money(baseReserve)],
-        ["Cash flow after mortgage", money(cashFlowAfterMortgage)],
-        ["DTI", pct(calc.dti)]
-      ]
-    },
-    {
-      ...college,
-      facts: [
-        ["Projected Purdue gap", money(calc.collegeGap)],
-        ["College fund", money(state.college.collegeFund)],
-        ["Annual family support", money(state.college.annualFamilySupport)]
-      ]
-    },
-    {
-      ...investment,
-      facts: [
-        ["Taxable + cash", money(taxableAssets, true)],
-        ["Retirement balance", money(state.household.retirement, true)],
-        ["Savings rate", pct(calc.savingsRate)]
-      ]
-    }
-  ];
-
-  document.getElementById("decisionGrid").innerHTML = cards.map(card => `
-    <article class="decision-card">
-      <span class="decision-status" style="background:${card.color}">${card.status}</span>
-      <h3>${card.title}</h3>
-      <p>${card.body}</p>
-      <div class="decision-facts">
-        ${card.facts.map(([label, value]) => `<div><span>${label}</span><strong>${value}</strong></div>`).join("")}
-      </div>
-    </article>
-  `).join("");
-}
-
-function renderRisks(calc) {
-  document.getElementById("riskAlerts").innerHTML = riskAlerts(calc).map(alert => `
-    <article class="risk-alert">
-      <span class="risk-dot" style="background:${alert.color}"></span>
-      <div><strong>${alert.label}</strong><span>${alert.text}</span></div>
-    </article>
-  `).join("");
-}
-
-function renderAdvisor(calc) {
-  const headline = document.getElementById("advisorHeadline");
-  const text = document.getElementById("advisorText");
-  if (calc.monthlyCashFlow < 0) {
-    headline.textContent = "Stabilize monthly cash flow first.";
-    text.textContent = "The current v1 calculation turns negative after savings and debt. Reduce discretionary expenses, lower the house target, or pause the purchase timeline before adding new fixed obligations.";
-  } else if (calc.emergencyMonths < 6) {
-    headline.textContent = "Build liquidity before the next big move.";
-    text.textContent = "Emergency reserves are below the 6-month family protection target. Direct surplus cash to reserves before increasing college support or down payment commitments.";
-  } else if (calc.dti > 36) {
-    headline.textContent = "The house plan is possible but tight.";
-    text.textContent = "Mortgage readiness improves if the purchase is delayed, the down payment rises, or the price target moves lower. Keep retirement savings protected while testing options.";
-  } else {
-    headline.textContent = "You have room to plan deliberately.";
-    text.textContent = "Cash flow, emergency reserves, and retirement protection are aligned for the Terry family. For v1, use the simulator to compare Purdue support against house purchase timing.";
-  }
-}
-
-function renderCollege(calc) {
-  document.getElementById("collegeGapTotal").textContent = `Total gap: ${money(calc.collegeGap)}`;
-  document.getElementById("collegeTable").innerHTML = calc.collegeRows.map(row => `
-    <tr>
-      <td>Year ${row.year}</td>
-      <td>${money(row.projectedCost)}</td>
-      <td>${money(row.familySupport)}</td>
-      <td>${money(row.gap)}</td>
-    </tr>
-  `).join("");
-}
-
-function renderHouse(calc) {
-  document.getElementById("monthlyMortgage").textContent = money(calc.mortgage.total);
-  document.getElementById("dtiValue").textContent = pct(calc.dti);
-  document.getElementById("dtiLabel").textContent = calc.dti > 43 ? "High risk" : calc.dti > 36 ? "Watch closely" : "Healthy";
-  document.getElementById("houseRecommendation").textContent =
-    calc.dti > 36
-      ? `Consider delaying ${state.house.purchaseDelayYears + 1} year or increasing the down payment to bring DTI closer to 36%.`
-      : "The mortgage target fits the current income profile while preserving positive cash flow.";
-}
-
-function renderCashflow(calc) {
-  document.getElementById("cashFlowValue").textContent = money(calc.monthlyCashFlow);
-  document.getElementById("emergencyMonths").textContent = calc.emergencyMonths.toFixed(1);
-  document.getElementById("savingsRate").textContent = pct(calc.savingsRate);
-  document.getElementById("netWorthInline").textContent = money(calc.netWorth, true);
-}
-
-function renderScenario(baseCalc) {
-  const future = scenarioState();
-  const scenarioCalc = getCalculations(future);
-  const baseReserve = state.household.cash - state.house.downPayment;
-  const scenarioDelayCash = Math.max(0, state.scenario.delayHomePurchase) * 12 * Math.max(baseCalc.monthlyCashFlow, 0);
-  const postReserve = future.household.cash + scenarioDelayCash - future.house.downPayment;
-  const baseAfterMortgageCashFlow = baseCalc.monthlyCashFlow - baseCalc.mortgage.total;
-  const afterMortgageCashFlow = scenarioCalc.monthlyCashFlow - scenarioCalc.mortgage.total;
-  const verdict = getScenarioVerdict(postReserve, afterMortgageCashFlow, scenarioCalc);
-  const verdictEl = document.getElementById("scenarioVerdict");
-  verdictEl.className = `scenario-verdict ${verdict.level}`;
-  verdictEl.innerHTML = `<span>${verdict.label}</span><strong>${verdict.title}</strong>`;
-  document.getElementById("scenarioReserve").textContent = money(postReserve);
-  document.getElementById("scenarioCashFlow").textContent = money(afterMortgageCashFlow);
-  document.getElementById("scenarioCompare").innerHTML = [
-    ["Cash reserve", money(baseReserve), money(postReserve), postReserve - baseReserve],
-    ["Monthly cash flow", money(baseAfterMortgageCashFlow), money(afterMortgageCashFlow), afterMortgageCashFlow - baseAfterMortgageCashFlow],
-    ["Debt-to-income", pct(baseCalc.dti), pct(scenarioCalc.dti), scenarioCalc.dti - baseCalc.dti, "percent"],
-    ["College gap", money(baseCalc.collegeGap), money(scenarioCalc.collegeGap), scenarioCalc.collegeGap - baseCalc.collegeGap]
-  ].map(([label, base, scenario, delta, type]) => {
-    const isGood = label === "College gap" || label === "Debt-to-income" ? delta <= 0 : delta >= 0;
-    const deltaText = type === "percent" ? pct(delta) : money(delta);
-    return `
-      <div class="compare-card">
-        <span>${label}</span>
-        <div><small>Base</small><strong>${base}</strong></div>
-        <div><small>Scenario</small><strong>${scenario}</strong></div>
-        <em class="${isGood ? "positive" : "negative"}">${deltaText}</em>
-      </div>
-    `;
-  }).join("");
-  document.getElementById("scenarioRecommendation").textContent =
-    verdict.level === "risk"
-      ? "This scenario strains the Terry family plan. Lower the house price, delay longer, reduce the down payment change, or increase student loan support before committing."
-      : verdict.level === "watch"
-        ? "This scenario is workable but needs caution. Keep the emergency reserve above 6 months and do not let the mortgage crowd out Purdue or retirement goals."
-        : `This scenario looks healthy for v1. It changes monthly mortgage cost by ${money(scenarioCalc.mortgage.total - baseCalc.mortgage.total)} while keeping cash flow and reserves protected.`;
-}
-
-function getScenarioVerdict(postReserve, afterMortgageCashFlow, scenarioCalc) {
-  const reserveMonths = postReserve / Math.max(state.household.monthlyExpenses, 1);
-  if (postReserve < 0 || afterMortgageCashFlow < 0 || scenarioCalc.dti > 43 || reserveMonths < 4) {
-    return { level: "risk", label: "Risk", title: "This scenario is too tight" };
-  }
-  if (scenarioCalc.dti > 36 || reserveMonths < 6 || afterMortgageCashFlow < 1500) {
-    return { level: "watch", label: "Watch", title: "Workable, but protect liquidity" };
-  }
-  return { level: "good", label: "Good", title: "Balanced Terry family scenario" };
-}
-
-function renderGoals(calc) {
-  const goals = [
-    ["Emergency Fund", "Reach 8 months of expenses before expanding fixed commitments.", calc.emergencyMonths / 8 * 100],
-    ["Purdue Funding", "Cover the planned family support amount across four academic years.", (1 - calc.collegeGap / 90000) * 100],
-    ["Home Purchase", "Keep DTI below 36% with reserves intact after down payment.", 100 - Math.max(0, calc.dti - 28) * 5],
-    ["Retirement Protection", "Maintain retirement contributions through college and house decisions.", calc.retirementSafety],
-    ["Cash Flow Margin", "Preserve at least $2,500 monthly flexibility.", calc.monthlyCashFlow / 2500 * 100]
-  ];
-
-  document.getElementById("goalsList").innerHTML = goals.map(([title, description, progress]) => {
-    const safe = clamp(progress, 0, 100);
-    return `
-      <article class="goal-card">
-        <div>
-          <h3>${title}</h3>
-          <p>${description}</p>
-        </div>
-        <strong>${Math.round(safe)}%</strong>
-        <div class="goal-bar"><span style="width:${safe}%"></span></div>
-      </article>
-    `;
-  }).join("");
-}
-
-function renderReports(calc) {
-  document.getElementById("reportContent").innerHTML = `
-    <section class="report-section">
-      <h3>Executive Summary</h3>
-      <p>Net worth is ${money(calc.netWorth)} with ${calc.emergencyMonths.toFixed(1)} months of emergency coverage.</p>
-      <p>Monthly cash flow is ${money(calc.monthlyCashFlow)} before adding the planned mortgage.</p>
-    </section>
-    <section class="report-section">
-      <h3>College Planning</h3>
-      <p>${state.profile.school} 4-year projected family gap is ${money(calc.collegeGap)} after current fund balance, support target, and student loan assumptions.</p>
-    </section>
-    <section class="report-section">
-      <h3>Home Purchase</h3>
-      <p>Estimated monthly housing payment is ${money(calc.mortgage.total)} and total DTI is ${pct(calc.dti)}.</p>
-    </section>
-    <section class="report-section">
-      <h3>Risk Alerts</h3>
-      ${riskAlerts(calc).map(alert => `<p><strong>${alert.label}:</strong> ${alert.text}</p>`).join("")}
-    </section>
-  `;
-}
-
-function drawChart(id, series, labels, options = {}) {
-  const canvas = document.getElementById(id);
-  if (!canvas) return;
-  const ctx = canvas.getContext("2d");
-  const ratio = window.devicePixelRatio || 1;
-  const width = canvas.clientWidth;
-  const height = Number(canvas.getAttribute("height"));
-  canvas.width = width * ratio;
-  canvas.height = height * ratio;
-  ctx.scale(ratio, ratio);
-  ctx.clearRect(0, 0, width, height);
-
-  const padding = { top: 22, right: 18, bottom: 46, left: 58 };
-  const values = series.flatMap(item => item.values);
-  const max = Math.max(...values.map(value => Math.abs(value)), 1);
-  const innerW = width - padding.left - padding.right;
-  const innerH = height - padding.top - padding.bottom;
-  const colors = ["#276ef1", "#14b8c4", "#19a974", "#d99000", "#7c5cff"];
-  const groupW = innerW / labels.length;
-  const barW = Math.max(10, groupW / (series.length + 1.3));
-
-  ctx.strokeStyle = "#dce5ef";
-  ctx.lineWidth = 1;
-  ctx.fillStyle = "#687385";
-  ctx.font = "12px Inter, sans-serif";
-  for (let i = 0; i <= 4; i += 1) {
-    const y = padding.top + innerH - (innerH / 4) * i;
-    ctx.beginPath();
-    ctx.moveTo(padding.left, y);
-    ctx.lineTo(width - padding.right, y);
-    ctx.stroke();
-    ctx.fillText(money((max / 4) * i, true), 8, y + 4);
-  }
-
-  labels.forEach((label, index) => {
-    const groupX = padding.left + index * groupW + groupW * 0.18;
-    ctx.fillStyle = "#687385";
-    ctx.fillText(label, padding.left + index * groupW + 6, height - 18);
-    series.forEach((item, itemIndex) => {
-      const value = item.values[index];
-      const barH = (Math.abs(value) / max) * innerH;
-      const x = groupX + itemIndex * barW;
-      const y = padding.top + innerH - barH;
-      ctx.fillStyle = item.color || colors[itemIndex % colors.length];
-      roundRect(ctx, x, y, barW * 0.72, barH, 5);
-      ctx.fill();
-    });
-  });
-
-  if (options.legend !== false) {
-    series.forEach((item, index) => {
-      const x = padding.left + index * 130;
-      ctx.fillStyle = item.color || colors[index % colors.length];
-      roundRect(ctx, x, 2, 12, 12, 3);
-      ctx.fill();
-      ctx.fillStyle = "#687385";
-      ctx.fillText(item.name, x + 18, 12);
-    });
-  }
-}
-
-function drawDonut(id, slices) {
-  const canvas = document.getElementById(id);
-  if (!canvas) return;
-  const ctx = canvas.getContext("2d");
-  const ratio = window.devicePixelRatio || 1;
-  const width = canvas.clientWidth;
-  const height = Number(canvas.getAttribute("height"));
-  canvas.width = width * ratio;
-  canvas.height = height * ratio;
-  ctx.scale(ratio, ratio);
-  ctx.clearRect(0, 0, width, height);
-  const total = slices.reduce((sum, item) => sum + item.value, 0);
-  const centerX = width / 2;
-  const centerY = height / 2;
-  const radius = Math.min(width, height) * 0.32;
-  let angle = -Math.PI / 2;
-  slices.forEach(slice => {
-    const next = angle + (slice.value / total) * Math.PI * 2;
-    ctx.beginPath();
-    ctx.arc(centerX, centerY, radius, angle, next);
-    ctx.lineWidth = 34;
-    ctx.strokeStyle = slice.color;
-    ctx.stroke();
-    angle = next;
-  });
-  ctx.fillStyle = "#172033";
-  ctx.font = "800 24px Inter, sans-serif";
-  ctx.textAlign = "center";
-  ctx.fillText(money(total), centerX, centerY + 8);
-  ctx.textAlign = "left";
-  slices.forEach((slice, index) => {
-    const x = 16 + (index % 2) * (width / 2);
-    const y = height - 42 + Math.floor(index / 2) * 20;
-    ctx.fillStyle = slice.color;
-    roundRect(ctx, x, y - 10, 10, 10, 3);
-    ctx.fill();
-    ctx.fillStyle = "#687385";
-    ctx.font = "12px Inter, sans-serif";
-    ctx.fillText(slice.name, x + 16, y);
-  });
-}
-
-function roundRect(ctx, x, y, w, h, r) {
-  const radius = Math.min(r, Math.abs(w) / 2, Math.abs(h) / 2);
+// Chart helpers
+function drawBar(ctx, x, y, w, h, r, color) {
+  const rad = Math.min(r, w/2, Math.abs(h)/2);
   ctx.beginPath();
-  ctx.moveTo(x + radius, y);
-  ctx.arcTo(x + w, y, x + w, y + h, radius);
-  ctx.arcTo(x + w, y + h, x, y + h, radius);
-  ctx.arcTo(x, y + h, x, y, radius);
-  ctx.arcTo(x, y, x + w, y, radius);
-  ctx.closePath();
+  ctx.moveTo(x+rad,y); ctx.arcTo(x+w,y,x+w,y+h,rad); ctx.arcTo(x+w,y+h,x,y+h,rad);
+  ctx.arcTo(x,y+h,x,y,rad); ctx.arcTo(x,y,x+w,y,rad);
+  ctx.closePath(); ctx.fillStyle=color; ctx.fill();
+}
+function drawChart(id, series, labels) {
+  const canvas = document.getElementById(id);
+  if (!canvas) return;
+  const ctx = canvas.getContext("2d");
+  const dpr = window.devicePixelRatio||1;
+  const W = canvas.clientWidth, H = Number(canvas.getAttribute("height"));
+  canvas.width=W*dpr; canvas.height=H*dpr; ctx.scale(dpr,dpr); ctx.clearRect(0,0,W,H);
+  const pad={t:20,r:16,b:40,l:60};
+  const vals=series.flatMap(s=>s.values);
+  const max=Math.max(...vals.map(Math.abs),1);
+  const iW=W-pad.l-pad.r, iH=H-pad.t-pad.b;
+  const gW=iW/labels.length;
+  const bW=Math.max(8,gW/(series.length+1.2));
+  const colors=["#276ef1","#14b8c4","#19a974","#d99000","#7c5cff"];
+  ctx.strokeStyle="#dde5ee"; ctx.lineWidth=1;
+  ctx.font="11px Inter,sans-serif"; ctx.fillStyle="#687385";
+  for(let i=0;i<=4;i++){
+    const y=pad.t+iH-iH/4*i;
+    ctx.beginPath(); ctx.moveTo(pad.l,y); ctx.lineTo(W-pad.r,y); ctx.stroke();
+    ctx.fillText(money(max/4*i,true),4,y+4);
+  }
+  labels.forEach((lbl,li)=>{
+    ctx.fillStyle="#687385";
+    ctx.fillText(lbl,pad.l+li*gW+4,H-10);
+    series.forEach((s,si)=>{
+      const v=s.values[li];
+      const bH=(Math.abs(v)/max)*iH;
+      const x=pad.l+li*gW+gW*.12+si*bW;
+      drawBar(ctx,x,pad.t+iH-bH,bW*.8,bH,4,s.color||colors[si%colors.length]);
+    });
+  });
+  series.forEach((s,i)=>{
+    const x=pad.l+i*130;
+    ctx.fillStyle=s.color||colors[i%colors.length]; ctx.fillRect(x,2,10,10);
+    ctx.fillStyle="#687385"; ctx.fillText(s.name,x+14,11);
+  });
+}
+function drawDonut(id, slices) {
+  const canvas=document.getElementById(id);
+  if(!canvas) return;
+  const ctx=canvas.getContext("2d");
+  const dpr=window.devicePixelRatio||1;
+  const W=canvas.clientWidth, H=Number(canvas.getAttribute("height"));
+  canvas.width=W*dpr; canvas.height=H*dpr; ctx.scale(dpr,dpr); ctx.clearRect(0,0,W,H);
+  const total=slices.reduce((s,x)=>s+x.value,0);
+  if(!total) return;
+  const cx=W/2, cy=H/2-20, r=Math.min(W,H*.6)*.38;
+  let angle=-Math.PI/2;
+  slices.forEach(sl=>{
+    const next=angle+(sl.value/total)*Math.PI*2;
+    ctx.beginPath(); ctx.arc(cx,cy,r,angle,next);
+    ctx.lineWidth=36; ctx.strokeStyle=sl.color; ctx.stroke();
+    angle=next;
+  });
+  ctx.fillStyle="#172033"; ctx.font="700 18px Inter,sans-serif"; ctx.textAlign="center";
+  ctx.fillText(money(total,true),cx,cy+6);
+  ctx.textAlign="left";
+  slices.forEach((sl,i)=>{
+    const x=12+(i%2)*(W/2), y=H-36+Math.floor(i/2)*18;
+    ctx.fillStyle=sl.color; ctx.fillRect(x,y-9,10,10);
+    ctx.fillStyle="#687385"; ctx.font="12px Inter,sans-serif";
+    ctx.fillText(`${sl.name} ${pct(sl.value/total*100)}`,x+14,y);
+  });
 }
 
-function renderCharts(calc) {
-  drawChart("outlookChart", [
-    { name: "Cash", values: [state.household.cash, state.household.cash + calc.monthlyCashFlow * 12, state.household.cash + calc.monthlyCashFlow * 24], color: "#276ef1" },
-    { name: "College cost", values: calc.collegeRows.slice(0, 3).map(row => row.projectedCost), color: "#d99000" },
-    { name: "Mortgage", values: [calc.mortgage.total * 12, calc.mortgage.total * 12, calc.mortgage.total * 12], color: "#14b8c4" }
-  ], ["Now", "Year 1", "Year 2"]);
-
-  drawChart("collegeChart", [
-    { name: "Projected cost", values: calc.collegeRows.map(row => row.projectedCost), color: "#276ef1" },
-    { name: "Family support", values: calc.collegeRows.map(row => row.familySupport), color: "#19a974" },
-    { name: "Gap", values: calc.collegeRows.map(row => Math.max(row.gap, 0)), color: "#d99000" }
-  ], ["Year 1", "Year 2", "Year 3", "Year 4"]);
-
-  drawDonut("mortgageChart", [
-    { name: "Principal + interest", value: calc.mortgage.principalInterest, color: "#276ef1" },
-    { name: "Property tax", value: calc.mortgage.propertyTax, color: "#14b8c4" },
-    { name: "Insurance", value: calc.mortgage.insurance, color: "#19a974" },
-    { name: "HOA", value: calc.mortgage.hoa, color: "#d99000" }
-  ]);
-
-  drawChart("cashFlowChart", [
-    { name: "Monthly amount", values: [state.household.monthlyIncome, state.household.monthlyExpenses, state.household.retirementContribution, state.household.collegeMonthlySavings, Math.abs(calc.monthlyCashFlow)], color: "#276ef1" }
-  ], ["Income", "Expenses", "Retire", "College", "Surplus"], { legend: false });
-
-  const scenario = scenarioState();
-  const sc = getCalculations(scenario);
-  drawChart("scenarioChart", [
-    { name: "Base", values: [calc.mortgage.total, calc.collegeGap, state.house.downPayment], color: "#276ef1" },
-    { name: "Scenario", values: [sc.mortgage.total, sc.collegeGap, scenario.house.downPayment], color: "#14b8c4" }
-  ], ["Mortgage", "College gap", "Down pay"]);
+// Field helpers
+function field(label, id, val, step) {
+  return `<div class="field"><label>${label}</label><input id="${id}" type="number" step="${step||1}" value="${val}" /></div>`;
+}
+function bindFields(pairs) {
+  pairs.forEach(([id,key,step])=>{
+    const el=document.getElementById(id);
+    if(!el) return;
+    el.value=S[key];
+    el.addEventListener("change",()=>{ S[key]=Number(el.value)||0; markDirty(); render(); });
+  });
 }
 
-function renderScore(calc) {
-  const ring = document.getElementById("scoreRing");
-  ring.style.setProperty("--score", `${calc.score}%`);
-  document.getElementById("scoreValue").textContent = calc.score;
-  const items = [
-    ["Emergency", clamp(calc.emergencyMonths / 8 * 100, 0, 100)],
-    ["Home DTI", clamp(100 - (calc.dti - 25) * 4, 0, 100)],
-    ["Cash Flow", clamp(calc.monthlyCashFlow / 3500 * 100, 0, 100)],
-    ["Retirement", calc.retirementSafety]
-  ];
-  document.getElementById("scoreList").innerHTML = items.map(([name, value]) => `
-    <div class="score-item">
-      <strong>${name}</strong>
-      <span>${Math.round(value)}%</span>
-      <div class="score-bar"><span style="width:${value}%"></span></div>
+// Page: Assets
+function renderAssets() {
+  const stocks=loadStocks();
+  const tv=calcStockTotal(stocks);
+  S.investments=Math.round(tv);
+  const nw=calcNetWorth(stocks);
+  const cf=calcCashFlow();
+  document.getElementById("networthHero").innerHTML=`
+    <div>
+      <p style="margin:0 0 6px;font-size:12px;font-weight:800;text-transform:uppercase;letter-spacing:.06em;color:rgba(255,255,255,.5)">총 순자산</p>
+      <div class="hero-nw">${money(nw,true)}</div>
+      <p style="margin:8px 0 0;font-size:13px;color:rgba(255,255,255,.5)">자산 ${money(S.cash+tv+S.k401+S.ira+S.homeEquity,true)} — 부채 ${money(S.debts,true)}</p>
     </div>
-  `).join("");
+    <div class="hero-stats">
+      <div class="hero-stat"><span>현금</span><strong>${money(S.cash,true)}</strong></div>
+      <div class="hero-stat"><span>주식</span><strong>${money(tv,true)}</strong></div>
+      <div class="hero-stat"><span>401k+IRA</span><strong>${money(S.k401+S.ira,true)}</strong></div>
+      <div class="hero-stat"><span>부동산</span><strong>${money(S.homeEquity,true)}</strong></div>
+    </div>`;
+  const accts=[
+    {label:"현금 / 예금",  key:"cash",      sub:`비상금 ${(S.cash/Math.max(S.expenses,1)).toFixed(1)}개월분`, color:"#19a974"},
+    {label:"주식 계좌",    key:null,        val:tv, sub:`${stocks.length}개 종목`, color:"#276ef1"},
+    {label:"401k",         key:"k401",      sub:"은퇴 계좌 (세전)", color:"#7c5cff"},
+    {label:"IRA",          key:"ira",       sub:`${S.iraType} IRA`, color:"#14b8c4"},
+    {label:"부동산 Equity",key:"homeEquity", sub:"현재 홈에퀴티", color:"#d99000"},
+    {label:"부채",         key:"debts",     sub:"카드·대출 등", color:"#d94b4b"}
+  ];
+  document.getElementById("accountCards").innerHTML=accts.map(a=>{
+    const v=a.key?S[a.key]:a.val;
+    return `<div class="acct-card">
+      <div class="ac-label" style="color:${a.color}">${a.label}</div>
+      <div class="ac-value">${money(v,true)}</div>
+      ${a.key?`<input class="ac-input" type="number" data-key="${a.key}" value="${S[a.key]||0}" />`:""}      <div class="ac-sub">${a.sub}</div>
+    </div>`;
+  }).join("");
+  document.querySelectorAll(".ac-input").forEach(inp=>{
+    inp.addEventListener("change",()=>{ S[inp.dataset.key]=Number(inp.value)||0; markDirty(); render(); });
+  });
+  document.getElementById("flowInputs").innerHTML=[
+    field("월 소득","f_inc",S.income,100),
+    field("월 지출","f_exp",S.expenses,100),
+    field("401k 기여 (월)","f_k4c",S.k401Contrib,50),
+    field("대학 저축 (월)","f_cls",S.collegeSave,50)
+  ].join("");
+  bindFields([["f_inc","income",100],["f_exp","expenses",100],["f_k4c","k401Contrib",50],["f_cls","collegeSave",50]]);
+  drawChart("flowChart",[
+    {name:"소득",  values:[S.income],     color:"#19a974"},
+    {name:"지출",  values:[S.expenses],   color:"#d94b4b"},
+    {name:"401k", values:[S.k401Contrib], color:"#276ef1"},
+    {name:"저축", values:[S.collegeSave], color:"#d99000"},
+    {name:"잉여", values:[Math.max(cf,0)],color:"#14b8c4"}
+  ],["월"]);
+  const cfColor=cf>=0?"var(--green)":"var(--red)";
+  document.getElementById("flowSummary").innerHTML=`
+    <div><div class="sr-label">월 잉여</div><div class="sr-value" style="color:${cfColor}">${money(cf)}</div></div>
+    <div><div class="sr-label">연 저축 예상</div><div class="sr-value">${money(Math.max(cf,0)*12,true)}</div></div>
+    <div><div class="sr-label">저축률</div><div class="sr-value">${pct(S.income>0?(S.k401Contrib+S.collegeSave+Math.max(cf,0))/S.income*100:0)}</div></div>`;
 }
 
-function renderAll(shouldRenderForms = true) {
-  const calc = getCalculations();
-  if (shouldRenderForms) renderForms();
-  renderRisks(calc);
-  renderAdvisor(calc);
-  renderDecisions(calc);
-  renderMetrics(calc);
-  renderCollege(calc);
-  renderHouse(calc);
-  renderCashflow(calc);
-  renderScenario(calc);
-  renderFunding();
-  renderReminders();
-  renderTax();
-  renderRetirement();
-  renderTimeline();
-  renderGoals(calc);
-  renderReports(calc);
-  renderScore(calc);
-  renderCharts(calc);
+// Page: Invest
+function renderInvest() {
+  const stocks=loadStocks();
+  const tv=calcStockTotal(stocks);
+  const ct=stocks.reduce((s,x)=>s+x.shares*x.costBasis,0);
+  const gl=tv-ct;
+  const alloc=calcAllocation(stocks);
+  const annSal=S.income*12;
+  const myC=annSal*S.k401MyPct/100;
+  const empC=annSal*Math.min(S.k401MyPct,S.k401MatchPct)/100;
+  document.getElementById("investSummary").innerHTML=[
+    {label:"총 투자자산",val:money(S.k401+S.ira+tv,true),sub:"401k+IRA+주식"},
+    {label:"401k",val:money(S.k401,true),sub:`기여 ${pct(S.k401MyPct)} + 매칭 ${pct(S.k401MatchPct)}`},
+    {label:"IRA ("+S.iraType+")",val:money(S.ira,true),sub:`한도 ${money(S.iraContrib)}/yr`},
+    {label:"주식 손익",val:(gl>=0?"+":"")+money(gl,true),sub:ct>0?pct(gl/ct*100)+" 수익률":"—",color:gl>=0?"var(--green)":"var(--red)"}
+  ].map(c=>`<div class="stat-card"><div class="sc-label">${c.label}</div><div class="sc-value" style="${c.color?"color:"+c.color:""}">${c.val}</div><div class="sc-sub">${c.sub}</div></div>`).join("");
+  document.getElementById("k401Inputs").innerHTML=[
+    field("잔고 ($)","k_b",S.k401,1000),
+    field("내 기여율 (%)","k_m",S.k401MyPct,.5),
+    field("고용주 매칭 (%)","k_e",S.k401MatchPct,.5)
+  ].join("");
+  bindFields([["k_b","k401",1000],["k_m","k401MyPct",.5],["k_e","k401MatchPct",.5]]);
+  document.getElementById("k401Funds").innerHTML=`<p style="font-size:12px;font-weight:800;color:var(--muted);text-transform:uppercase;margin:0 0 10px">펀드 배분</p>${S.k401Funds.map(f=>`<div class="fund-bar"><div class="fund-bar-label"><span>${f.name}</span><strong>${f.pct}%</strong></div><div class="fund-track"><div class="fund-fill" style="width:${f.pct}%;background:${f.type==="stock"?"#276ef1":f.type==="bond"?"#14b8c4":"#19a974"}"></div></div></div>`).join("")}<p style="margin:12px 0 0;font-size:12px;color:var(--muted)">내 연간 기여: <strong style="color:var(--ink)">${money(myC)}</strong> · 고용주 매칭: <strong style="color:var(--green)">${money(empC)}</strong></p>`;
+  document.getElementById("iraLabel").textContent=S.iraType+" IRA";
+  document.getElementById("iraInputs").innerHTML=field("잔고 ($)","i_b",S.ira,1000)+field("연간 기여 한도 ($)","i_c",S.iraContrib,500)+`<div class="field"><label>IRA 종류</label><select id="i_t"><option value="Roth" ${S.iraType==="Roth"?"selected":""}>Roth IRA (인출 비과세)</option><option value="Traditional" ${S.iraType==="Traditional"?"selected":""}>Traditional IRA (인출 과세)</option></select></div>`;
+  bindFields([["i_b","ira",1000],["i_c","iraContrib",500]]);
+  document.getElementById("i_t").addEventListener("change",e=>{S.iraType=e.target.value;markDirty();render();});
+  document.getElementById("iraFunds").innerHTML=`<p style="font-size:12px;font-weight:800;color:var(--muted);text-transform:uppercase;margin:0 0 10px">펀드 배분</p>${S.iraFunds.map(f=>`<div class="fund-bar"><div class="fund-bar-label"><span>${f.name}</span><strong>${f.pct}%</strong></div><div class="fund-track"><div class="fund-fill" style="width:${f.pct}%;background:${f.type==="stock"?"#276ef1":f.type==="bond"?"#14b8c4":"#19a974"}"></div></div></div>`).join("")}`;
+  const sc={Technology:"#276ef1","Real Estate":"#7c5cff",Industrials:"#14b8c4",Energy:"#d99000",Healthcare:"#19a974",Financials:"#d94b4b",Consumer:"#ff9900"};
+  document.getElementById("stockBody").innerHTML=stocks.map(st=>{
+    const mv=st.shares*st.currentPrice, gl2=mv-st.shares*st.costBasis;
+    const glp=st.costBasis>0?gl2/(st.shares*st.costBasis)*100:0;
+    const c=gl2>=0?"var(--green)":"var(--red)";
+    return `<tr>
+      <td><strong style="color:var(--blue)">${st.ticker}</strong></td>
+      <td style="color:var(--muted)">${st.name}</td>
+      <td class="r"><input class="inline-num" type="number" data-id="${st.id}" data-f="shares" value="${st.shares}" step="1"/></td>
+      <td class="r"><input class="inline-num" type="number" data-id="${st.id}" data-f="costBasis" value="${st.costBasis}" step="0.01"/></td>
+      <td class="r"><input class="inline-num" type="number" data-id="${st.id}" data-f="currentPrice" value="${st.currentPrice}" step="0.01"/></td>
+      <td class="r"><strong>${money(mv)}</strong></td>
+      <td class="r" style="color:${c};font-weight:700">${gl2>=0?"+":""}${money(gl2)}</td>
+      <td class="r" style="color:${c};font-weight:700">${glp>=0?"+":""}${pct(glp)}</td>
+      <td><button onclick="delStock(${st.id})" style="border:0;background:none;cursor:pointer;color:var(--muted);font-size:18px">&times;</button></td>
+    </tr>`;
+  }).join("");
+  document.getElementById("stockFoot").innerHTML=`<td colspan="5" style="font-weight:800">합계</td><td class="r">${money(tv)}</td><td class="r" style="color:${gl>=0?"var(--green)":"var(--red)"};font-weight:800">${gl>=0?"+":""}${money(gl)}</td><td class="r" style="color:${gl>=0?"var(--green)":"var(--red)"};font-weight:800">${ct>0?pct(gl/ct*100):""}</td><td></td>`;
+  document.querySelectorAll(".inline-num").forEach(inp=>{
+    inp.addEventListener("change",()=>{
+      const arr=loadStocks();
+      const st=arr.find(x=>x.id===Number(inp.dataset.id));
+      if(st){st[inp.dataset.f]=Number(inp.value)||0; saveStocks(arr); markDirty(); render();}
+    });
+  });
+  drawDonut("allocChart",[
+    {name:"주식",value:alloc.totalStocks,color:"#276ef1"},
+    {name:"채권",value:alloc.totalBonds, color:"#14b8c4"},
+    {name:"현금",value:alloc.totalCash,  color:"#19a974"}
+  ]);
+  const drift=[
+    {label:"주식",cur:alloc.stocksPct,target:S.targetStocks},
+    {label:"채권",cur:alloc.bondsPct, target:S.targetBonds},
+    {label:"현금",cur:alloc.cashPct,  target:S.targetCash}
+  ];
+  let rh=drift.map(d=>{
+    const diff=d.cur-d.target, abs=Math.abs(diff);
+    const color=abs<3?"var(--green)":abs<8?"var(--amber)":"var(--red)";
+    const lbl=abs<3?"균형":diff>0?"과다 → 줄이기":"부족 → 늘리기";
+    return `<div class="rebal-item" style="background:${color}14;border-left:4px solid ${color}"><strong style="color:${color}">${d.label}: ${pct(d.cur)} (목표 ${pct(d.target)}) — ${lbl}</strong>${abs>=3?`약 ${money(abs/100*alloc.total,true)} 조정 필요`:"현재 목표 범위 내"}</div>`;
+  }).join("");
+  const losers=stocks.filter(s=>s.currentPrice<s.costBasis);
+  if(losers.length) rh+=`<div class="rebal-item" style="background:#f2f7ff;border-left:4px solid var(--blue)"><strong style="color:var(--blue)">💡 Tax-Loss Harvesting 기회</strong>손실 종목: ${losers.map(s=>s.ticker).join(", ")} — 매도 시 자본이득세 절감 가능</div>`;
+  document.getElementById("rebalGuide").innerHTML=rh;
+  document.getElementById("targetInputs").innerHTML=[
+    field("목표 주식 (%)","t_s",S.targetStocks,1),
+    field("목표 채권 (%)","t_b",S.targetBonds,1),
+    field("목표 현금 (%)","t_c",S.targetCash,1)
+  ].join("");
+  bindFields([["t_s","targetStocks",1],["t_b","targetBonds",1],["t_c","targetCash",1]]);
 }
 
-document.getElementById("saveDataButton").addEventListener("click", () => {
-  saveState();
-  setSaveStatus(false);
-});
-
-document.getElementById("resetDataButton").addEventListener("click", () => {
-  state = structuredClone(sampleData);
-  saveState();
-  setSaveStatus(false);
-  renderAll();
-});
-
-document.getElementById("printReportButton").addEventListener("click", () => window.print());
-window.addEventListener("resize", () => renderCharts(getCalculations()));
-
-// ── Reminders ──────────────────────────────────────────────
-const defaultReminders = [
-  { id: 1, title: "Purdue Installment Plan 등록", date: "2026-08-01", note: "MyPurdue → Student Account → Payment Plan. 마감 전 반드시 등록!", category: "college", done: false },
-  { id: 2, title: "FRMI + PBI + NESR + AVGO 전량 매도", date: "2026-07-15", note: "손실 FRMI 먼저 팔아서 세금 상쇄. 총 $19,081 확보.", category: "stock", done: false },
-  { id: 3, title: "NVDA 25주 매도", date: "2026-07-15", note: "$5,381 확보. 1~2회차 등록금 준비 완료.", category: "stock", done: false },
-  { id: 4, title: "1회차 등록금 납부", date: "2026-08-10", note: "약 $12,250. 주식 매도금에서 납부.", category: "college", done: false },
-  { id: 5, title: "작은 집으로 이사", date: "2026-08-31", note: "렌트 $3,600 → $1,575. 월 $2,025 절약, 연 $24,300 현금흐름 개선.", category: "housing", done: false },
-  { id: 6, title: "2회차 등록금 납부", date: "2026-09-10", note: "약 $12,250. 주식 매도금에서 납부.", category: "college", done: false },
-  { id: 7, title: "🎂 59½ 생일 — 401k 페널티 없이 인출 가능!", date: "2026-10-01", note: "오늘부터 401k에서 페널티 없이 인출 가능! (1967년 4월생)", category: "retirement", done: false },
-  { id: 8, title: "3회차 등록금 납부 — 401k에서 인출", date: "2026-10-10", note: "약 $12,250. 401k에서 페널티 없이 인출. 소득세만 납부.", category: "retirement", done: false },
-  { id: 9, title: "4회차 등록금 납부 — 401k에서 인출", date: "2026-11-10", note: "약 $12,250. 401k에서 페널티 없이 인출.", category: "retirement", done: false },
-  { id: 10, title: "세금 보고 준비 — 자본이득 정리", date: "2027-03-01", note: "FRMI 손실로 다른 수익 상쇄. CPA에게 자본이득 내역 전달.", category: "tax", done: false },
-  { id: 11, title: "401k HR에 Loan provision 확인", date: "2026-06-15", note: "있으면 $50 수수료로 등록금 해결 가능. 인사팀 또는 401k 포털 확인.", category: "retirement", done: false }
-];
-
-function loadReminders() {
-  try {
-    const saved = JSON.parse(localStorage.getItem(REMINDERS_KEY));
-    return saved && saved.length > 0 ? saved : defaultReminders.map(r => ({ ...r }));
-  } catch {
-    return defaultReminders.map(r => ({ ...r }));
-  }
-}
-
-function saveReminders(reminders) {
-  localStorage.setItem(REMINDERS_KEY, JSON.stringify(reminders));
-}
-
-function renderReminders() {
-  const reminders = loadReminders();
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
-
-  const categoryMeta = {
-    college: { emoji: "🎓", color: "#d99000", bg: "#fffaf0" },
-    stock: { emoji: "📈", color: "#276ef1", bg: "#f2f7ff" },
-    retirement: { emoji: "🏦", color: "#19a974", bg: "#eefaf5" },
-    housing: { emoji: "🏠", color: "#7c5cff", bg: "#f5f2ff" },
-    tax: { emoji: "💰", color: "#14b8c4", bg: "#f0fbfc" },
-    other: { emoji: "📌", color: "#687385", bg: "#f5f7fb" }
-  };
-
-  const pending = reminders.filter(r => !r.done).sort((a, b) => new Date(a.date) - new Date(b.date));
-  const done = reminders.filter(r => r.done);
-
-  function daysUntil(dateStr) {
-    const d = new Date(dateStr);
-    d.setHours(0, 0, 0, 0);
-    return Math.ceil((d - today) / (1000 * 60 * 60 * 24));
-  }
-
-  function urgencyBadge(days) {
-    if (days < 0) return `<span style="background:#d94b4b;color:white;padding:3px 10px;border-radius:999px;font-size:11px;font-weight:800">OVERDUE ${Math.abs(days)}일 지남</span>`;
-    if (days === 0) return `<span style="background:#d94b4b;color:white;padding:3px 10px;border-radius:999px;font-size:11px;font-weight:800">오늘!</span>`;
-    if (days <= 7) return `<span style="background:#d94b4b;color:white;padding:3px 10px;border-radius:999px;font-size:11px;font-weight:800">D-${days}</span>`;
-    if (days <= 30) return `<span style="background:#d99000;color:white;padding:3px 10px;border-radius:999px;font-size:11px;font-weight:800">D-${days}</span>`;
-    return `<span style="background:#e7edf4;color:#687385;padding:3px 10px;border-radius:999px;font-size:11px;font-weight:800">D-${days}</span>`;
-  }
-
-  document.getElementById("reminderList").innerHTML = pending.length === 0
-    ? `<p style="color:var(--muted);text-align:center;padding:24px">모든 액션 완료! 🎉</p>`
-    : pending.map(r => {
-      const meta = categoryMeta[r.category] || categoryMeta.other;
-      const days = daysUntil(r.date);
-      const isUrgent = days <= 30;
-      return `
-        <div style="
-          display:grid;grid-template-columns:auto 1fr auto;gap:14px;align-items:start;
-          padding:16px;border-radius:10px;
-          border:1.5px solid ${isUrgent && days <= 7 ? "#f0b8b8" : "var(--line)"};
-          background:${isUrgent && days <= 7 ? "#fff8f8" : meta.bg};
-        ">
-          <div style="width:40px;height:40px;border-radius:10px;background:${meta.color}20;display:grid;place-items:center;font-size:20px;flex-shrink:0">
-            ${meta.emoji}
-          </div>
-          <div style="min-width:0">
-            <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:4px">
-              <strong style="font-size:15px">${r.title}</strong>
-              ${urgencyBadge(days)}
-            </div>
-            <div style="font-size:13px;color:var(--muted);margin-bottom:6px">
-              📅 ${new Date(r.date).toLocaleDateString("ko-KR", { year:"numeric", month:"long", day:"numeric" })}
-            </div>
-            ${r.note ? `<div style="font-size:13px;color:var(--ink);line-height:1.5">${r.note}</div>` : ""}
-          </div>
-          <button onclick="toggleReminder(${r.id})" style="
-            min-height:36px;padding:0 14px;border-radius:8px;
-            border:1.5px solid ${meta.color};background:white;
-            color:${meta.color};font-weight:800;cursor:pointer;font-size:13px;white-space:nowrap
-          ">완료 ✓</button>
-        </div>
-      `;
-    }).join("");
-
-  document.getElementById("reminderDoneList").innerHTML = done.length === 0
-    ? `<p style="color:var(--muted);font-size:13px">아직 완료된 항목 없음</p>`
-    : done.map(r => {
-      const meta = categoryMeta[r.category] || categoryMeta.other;
-      return `
-        <div style="display:flex;align-items:center;gap:12px;padding:12px;border-radius:8px;background:#f5f7fb;opacity:0.7">
-          <span style="font-size:16px">${meta.emoji}</span>
-          <span style="flex:1;text-decoration:line-through;color:var(--muted);font-size:14px">${r.title}</span>
-          <span style="font-size:12px;color:var(--muted)">${new Date(r.date).toLocaleDateString("ko-KR", { month:"short", day:"numeric" })}</span>
-          <button onclick="toggleReminder(${r.id})" style="border:0;background:none;cursor:pointer;color:var(--muted);font-size:12px">되돌리기</button>
-        </div>
-      `;
-    }).join("");
-}
-
-window.toggleReminder = function(id) {
-  const reminders = loadReminders();
-  const r = reminders.find(r => r.id === id);
-  if (r) r.done = !r.done;
-  saveReminders(reminders);
-  renderReminders();
+window.delStock=function(id){
+  if(!confirm("이 종목을 삭제할까요?")) return;
+  const arr=loadStocks().filter(s=>s.id!==id);
+  saveStocks(arr); markDirty(); render();
 };
 
-// Add reminder modal
-document.getElementById("addReminderButton").addEventListener("click", () => {
-  const modal = document.getElementById("reminderModal");
-  modal.style.display = "flex";
-  document.getElementById("newReminderDate").value = new Date().toISOString().split("T")[0];
-});
-
-document.getElementById("cancelReminderButton").addEventListener("click", () => {
-  document.getElementById("reminderModal").style.display = "none";
-});
-
-document.getElementById("saveReminderButton").addEventListener("click", () => {
-  const title = document.getElementById("newReminderTitle").value.trim();
-  const date = document.getElementById("newReminderDate").value;
-  if (!title || !date) return;
-  const reminders = loadReminders();
-  const newId = Math.max(0, ...reminders.map(r => r.id)) + 1;
-  reminders.push({
-    id: newId,
-    title,
-    date,
-    note: document.getElementById("newReminderNote").value.trim(),
-    category: document.getElementById("newReminderCategory").value,
-    done: false
-  });
-  saveReminders(reminders);
-  document.getElementById("reminderModal").style.display = "none";
-  document.getElementById("newReminderTitle").value = "";
-  document.getElementById("newReminderNote").value = "";
-  renderReminders();
-});
-
-// ── AI Chat Advisor ──────────────────────────────────────────────
-const AI_KEY_STORAGE = "terry-finance-ai-key";
-let aiMessages = []; // {role, content}
-
-function getAiKey() {
-  return localStorage.getItem(AI_KEY_STORAGE) || "";
-}
-
-function buildFinancialContext() {
-  const h = state.household;
-  const c = state.college;
-  const house = state.house;
-  const r = state.retirement;
-  const p = state.profile;
-  const calc = getCalculations();
-  const retCalc = getRetirementCalculations();
-  const taxCalc = getTaxCalculations();
-
-  const invCalc = getInvestmentCalc();
-  const stocks = invCalc.stocks;
-  const acc = getAccountsState();
-
-  return `당신은 Terry 가족의 전담 재무 어드바이저입니다. 아래는 현재 Terry 가족의 실제 재무 데이터입니다. 이 데이터를 기반으로 한국어로 친절하고 구체적인 재무 조언을 해주세요.
-
-## Terry 가족 프로필
-- 부모 이름: ${p.parentName}, 나이: ${p.parentAge}세
-- 자녀: ${p.studentName}, 대학: ${p.school}
-- 목표 은퇴 나이: ${p.retirementTargetAge}세 (${p.retirementTargetAge - p.parentAge}년 후)
-
-## 현재 자산 현황
-- 현금/예금: ${money(h.cash)}
-- 주식 계좌 (Taxable): ${money(invCalc.taxableTotal)} (${stocks.length}개 종목)
-- 401k 잔고: ${money(invCalc.k401Total)}
-- ${acc.ira.type} IRA 잔고: ${money(invCalc.iraTotal)}
-- 현재 주택 자산 (equity): ${money(h.homeEquity)}
-- 부채 (모기지 제외): ${money(h.debts)}
-- **순자산: ${money(calc.netWorth)}**
-
-## 개별 주식 보유 현황
-${stocks.map(s => {
-  const mktVal = s.shares * s.currentPrice;
-  const gl = mktVal - s.shares * s.costBasis;
-  return `- ${s.ticker} (${s.name}): ${s.shares}주 × $${s.currentPrice} = ${money(mktVal)} (손익: ${gl >= 0 ? "+" : ""}${money(gl)})`;
-}).join("\n")}
-
-## 자산 배분 현황
-- 주식: ${invCalc.stocksPct.toFixed(1)}% (목표 ${acc.target.stocks}%)
-- 채권: ${invCalc.bondsPct.toFixed(1)}% (목표 ${acc.target.bonds}%)
-- 현금: ${invCalc.cashPct.toFixed(1)}% (목표 ${acc.target.cash}%)
-
-## 401k 현황
-- 잔고: ${money(invCalc.k401Total)}
-- 내 기여율: ${acc.k401.myContribPct}% (연 ${money(invCalc.myContrib)})
-- 고용주 매칭: ${acc.k401.employerMatchPct}% (연 ${money(invCalc.employerContrib)})
-- 펀드 배분: ${acc.k401.funds.map(f => `${f.name} ${f.pct}%`).join(", ")}
-
-## IRA 현황
-- 잔고: ${money(invCalc.iraTotal)} (${acc.ira.type})
-- 연간 기여 한도: ${money(acc.ira.annualContrib)}
-- 펀드 배분: ${acc.ira.funds.map(f => `${f.name} ${f.pct}%`).join(", ")}
-
-## 월 소득 및 지출
-- 월 소득: ${money(h.monthlyIncome)}
-- 월 지출: ${money(h.monthlyExpenses)}
-- 월 은퇴 기여금: ${money(h.retirementContribution)}
-- 월 대학 저축: ${money(h.collegeMonthlySavings)}
-- **월 잉여 현금: ${money(calc.monthlyCashFlow)}**
-- 비상금 보유 기간: ${calc.emergencyMonths.toFixed(1)}개월
-
-## 대학 등록금 계획 (${p.school})
-- 현재 연간 등록금: ${money(c.annualCost)}
-- ${p.studentStartYear}년 후 시작 예정
-- 대학 저축 잔고: ${money(c.collegeFund)}
-- 연간 가족 지원 목표: ${money(c.annualFamilySupport)}
-- 연간 학자금 대출: ${money(c.studentLoan)}
-- **예상 4년 총 부족분: ${money(calc.collegeGap)}**
-
-## 주택 구매 계획
-- 목표 주택 가격: ${money(house.housePrice)}
-- 다운페이먼트: ${money(house.downPayment)}
-- 이자율: ${house.interestRate}%
-- 대출 기간: ${house.loanYears}년
-- ${house.purchaseDelayYears}년 후 구매 예정
-- **월 모기지 총액 (PITI+HOA): ${money(calc.mortgage.total)}**
-- **DTI (부채 대비 소득 비율): ${calc.dti.toFixed(1)}%**
-
-## 은퇴 계획
-- 현재 은퇴 계좌 잔고: ${money(h.retirement)}
-- 예상 연 수익률: ${r.annualReturn}%
-- **은퇴 시 예상 잔고: ${money(retCalc.projectedBalance)}**
-- **은퇴 후 월 인출 가능액: ${money(retCalc.monthlyWithdrawal)}**
-- **예상 커버 기간: ${retCalc.coverageYears >= 99 ? "30년 이상" : retCalc.coverageYears + "년"}**
-
-## 세금 현황
-- 연 소득: ${money(taxCalc.grossIncome)}
-- 예상 연방세: ${money(taxCalc.totalFederal)}
-- 실효세율: ${taxCalc.effectiveRate.toFixed(1)}%
-- 한계세율: ${taxCalc.marginalRate}%
-
-## 현재 재무 건강도
-- 종합 점수: ${calc.score}/100
-- 비상금: ${calc.emergencyMonths < 6 ? "⚠️ 부족 (" + calc.emergencyMonths.toFixed(1) + "개월)" : "✅ 양호 (" + calc.emergencyMonths.toFixed(1) + "개월)"}
-- DTI: ${calc.dti > 36 ? "⚠️ 주의 (" + calc.dti.toFixed(1) + "%)" : "✅ 양호 (" + calc.dti.toFixed(1) + "%)"}
-- 월 현금흐름: ${calc.monthlyCashFlow < 0 ? "❌ 마이너스" : "✅ " + money(calc.monthlyCashFlow)}
-
-위 데이터를 바탕으로 사용자 질문에 답변해주세요. 숫자를 인용할 때는 구체적인 금액을 언급하고, 실행 가능한 조언을 제공하세요.`;
-}
-
-async function sendAiMessage() {
-  const input = document.getElementById("aiInput");
-  const userText = input.value.trim();
-  if (!userText) return;
-
-  const apiKey = getAiKey();
-  if (!apiKey) {
-    alert("API 키를 먼저 입력해주세요.");
-    return;
+// Page: Goals
+function renderGoals() {
+  document.getElementById("collegeInputs").innerHTML=[
+    field("연간 등록금 ($)","co_c",S.collegeCost,100),
+    field("물가상승률 (%)","co_i",S.collegeInflation,.1),
+    field("시작까지 (년)","co_y",S.collegeYears,1),
+    field("대학 저축 잔고 ($)","co_f",S.collegeFund,1000),
+    field("연간 가족 지원 ($)","co_s",S.collegeSupport,500),
+    field("연간 학자금 대출 ($)","co_l",S.collegeLoan,500)
+  ].join("");
+  bindFields([["co_c","collegeCost",100],["co_i","collegeInflation",.1],["co_y","collegeYears",1],["co_f","collegeFund",1000],["co_s","collegeSupport",500],["co_l","collegeLoan",500]]);
+  let fund=S.collegeFund, gap=0;
+  const rows=[];
+  for(let y=1;y<=4;y++){
+    const cost=S.collegeCost*(1+S.collegeInflation/100)**(S.collegeYears+y-1);
+    const avail=S.collegeSupport+S.collegeLoan+Math.max(fund,0)/Math.max(5-y,1);
+    const g=Math.max(cost-avail,0); fund-=Math.max(avail-S.collegeSupport-S.collegeLoan,0); gap+=g;
+    rows.push({y,cost,g});
   }
-
-  input.value = "";
-  input.disabled = true;
-  document.getElementById("aiSend").disabled = true;
-
-  // Hide welcome screen
-  const welcome = document.getElementById("aiWelcome");
-  if (welcome) welcome.style.display = "none";
-
-  // Add user message
-  aiMessages.push({ role: "user", content: userText });
-  renderAiMessages(true);
-
-  // Add loading indicator
-  const messagesEl = document.getElementById("aiMessages");
-  const loadingId = "ai-loading-" + Date.now();
-  const loadingDiv = document.createElement("div");
-  loadingDiv.id = loadingId;
-  loadingDiv.style.cssText = "display:flex;align-items:center;gap:10px;padding:12px 16px;background:white;border-radius:12px;border:1px solid var(--line);max-width:80%;align-self:flex-start";
-  loadingDiv.innerHTML = `<div style="width:8px;height:8px;border-radius:50%;background:var(--blue);animation:pulse 1s infinite"></div><span style="color:var(--muted);font-size:14px">AI가 분석 중...</span>`;
-  messagesEl.appendChild(loadingDiv);
-  messagesEl.scrollTop = messagesEl.scrollHeight;
-
-  try {
-    const systemPrompt = buildFinancialContext();
-    const response = await fetch("https://api.anthropic.com/v1/messages", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "x-api-key": apiKey,
-        "anthropic-version": "2023-06-01",
-        "anthropic-dangerous-direct-browser-access": "true"
-      },
-      body: JSON.stringify({
-        model: "claude-haiku-4-5-20251001",
-        max_tokens: 1024,
-        system: systemPrompt,
-        messages: aiMessages
-      })
-    });
-
-    if (!response.ok) {
-      const err = await response.json().catch(() => ({}));
-      throw new Error(err.error?.message || `API 오류 (${response.status})`);
-    }
-
-    const data = await response.json();
-    const assistantText = data.content?.[0]?.text || "(응답 없음)";
-    aiMessages.push({ role: "assistant", content: assistantText });
-
-    loadingDiv.remove();
-    renderAiMessages(false);
-  } catch (err) {
-    loadingDiv.remove();
-    const errDiv = document.createElement("div");
-    errDiv.style.cssText = "padding:12px 16px;background:#fff2f2;border-radius:12px;border:1px solid #fca5a5;color:#b91c1c;font-size:14px;max-width:80%;align-self:flex-start";
-    errDiv.textContent = `오류: ${err.message}`;
-    messagesEl.appendChild(errDiv);
-    messagesEl.scrollTop = messagesEl.scrollHeight;
-    // Remove failed user message from history
-    aiMessages.pop();
-  } finally {
-    input.disabled = false;
-    document.getElementById("aiSend").disabled = false;
-    input.focus();
+  const coOk=gap<5000;
+  document.getElementById("collegeResult").innerHTML=rows.map(r=>`<div class="gr-row"><span>${r.y}학년 예상 비용</span><strong>${money(r.cost)}</strong></div>`).join("")+`<div class="gr-row"><span>4년 총 부족분</span><strong style="color:${coOk?"var(--green)":"var(--amber)"}">${money(gap)}</strong></div><div class="gr-verdict" style="background:${coOk?"#eaf8f2":"#fff8ec"};color:${coOk?"#147852":"#9a6500"}">${coOk?"✅ 현재 계획으로 등록금 커버 가능":`⚠️ 부족분 ${money(gap)} — 저축 증액 필요`}</div>`;
+  document.getElementById("houseInputs").innerHTML=[
+    field("목표 집 가격 ($)","h_p",S.housePrice,5000),
+    field("다운페이먼트 ($)","h_d",S.houseDown,5000),
+    field("이자율 (%)","h_r",S.houseRate,.05),
+    field("대출 기간 (년)","h_t",S.houseTerm,5),
+    field("구매 예정 (몇 년 후)","h_y",S.houseDelay,1)
+  ].join("");
+  bindFields([["h_p","housePrice",5000],["h_d","houseDown",5000],["h_r","houseRate",.05],["h_t","houseTerm",5],["h_y","houseDelay",1]]);
+  const mtg=calcMortgage();
+  const cf=calcCashFlow();
+  const dti=S.income>0?mtg.total/S.income*100:0;
+  const cashAfter=S.cash-S.houseDown;
+  const hOk=dti<36&&cashAfter>S.expenses*6&&cf-mtg.total>0;
+  document.getElementById("houseResult").innerHTML=`
+    <div class="gr-row"><span>월 원리금</span><strong>${money(mtg.pi)}</strong></div>
+    <div class="gr-row"><span>세금+보험+HOA</span><strong>${money(mtg.tax+mtg.ins+mtg.hoa)}</strong></div>
+    <div class="gr-row"><span>월 총 주거비</span><strong style="font-size:16px">${money(mtg.total)}</strong></div>
+    <div class="gr-row"><span>DTI</span><strong style="color:${dti>36?"var(--red)":"var(--green)"}">${pct(dti)}</strong></div>
+    <div class="gr-row"><span>다운 후 잔여 현금</span><strong style="color:${cashAfter<S.expenses*6?"var(--amber)":"var(--green)"}">${money(cashAfter)}</strong></div>
+    <div class="gr-verdict" style="background:${hOk?"#eaf8f2":"#fff8ec"};color:${hOk?"#147852":"#9a6500"}">${hOk?"✅ 현재 조건으로 구매 가능":"⚠️ "+(dti>36?"DTI "+pct(dti)+" 높음":cashAfter<S.expenses*6?"다운 후 비상금 부족":"월 현금흐름 마이너스")}</div>`;
+  document.getElementById("retireInputs").innerHTML=[
+    field("현재 나이","r_a",S.currentAge,1),
+    field("은퇴 목표 나이","r_r",S.retireAge,1),
+    field("예상 연 수익률 (%)","r_g",S.retireReturn,.1),
+    field("인출률 (%)","r_w",S.retireWithdraw,.1)
+  ].join("");
+  bindFields([["r_a","currentAge",1],["r_r","retireAge",1],["r_g","retireReturn",.1],["r_w","retireWithdraw",.1]]);
+  const yrs=Math.max(S.retireAge-S.currentAge,0);
+  const annC=S.k401Contrib*12;
+  let bal=S.k401+S.ira;
+  for(let i=0;i<yrs;i++) bal=bal*(1+S.retireReturn/100)+annC;
+  const annual=bal*S.retireWithdraw/100;
+  const monthly=annual/12;
+  const coverYrs=annual>0?Math.min(Math.floor(bal/annual),99):99;
+  const rOk=coverYrs>=25;
+  document.getElementById("retireResult").innerHTML=`
+    <div class="gr-row"><span>남은 기간</span><strong>${yrs}년</strong></div>
+    <div class="gr-row"><span>은퇴 시 예상 잔고</span><strong>${money(bal,true)}</strong></div>
+    <div class="gr-row"><span>월 인출 가능액</span><strong>${money(monthly)}</strong></div>
+    <div class="gr-row"><span>커버 기간</span><strong>${coverYrs>=99?"30년 이상":coverYrs+"년"}</strong></div>
+    <div class="gr-verdict" style="background:${rOk?"#eaf8f2":"#fff8ec"};color:${rOk?"#147852":"#9a6500"}">${rOk?`✅ ${coverYrs>=99?"30년 이상":coverYrs+"년"} 커버 — 은퇴 계획 양호`:`⚠️ ${coverYrs}년 커버 — 기여금 증액 검토`}</div>`;
+  const totalYrs=Math.max(yrs+3,20);
+  const lbls=[], cVals=[], rVals=[];
+  let cash=S.cash, rBal=S.k401+S.ira;
+  const cf2=calcCashFlow();
+  for(let i=0;i<=totalYrs;i+=2){
+    lbls.push(`${S.currentAge+i}세`);
+    const cy=i-S.collegeYears;
+    const cCost=(cy>=0&&cy<4)?S.collegeCost*(1+S.collegeInflation/100)**(S.collegeYears+cy):0;
+    const mAnn=i>=S.houseDelay?mtg.total*12:0;
+    if(i===S.houseDelay) cash-=S.houseDown;
+    cash+=cf2*24-cCost*2-mAnn*2;
+    for(let j=0;j<2;j++) rBal=rBal*(1+S.retireReturn/100)+annC;
+    cVals.push(Math.max(cash,0));
+    rVals.push(rBal/5);
   }
+  drawChart("timelineChart",[
+    {name:"현금 보유",values:cVals,color:"#276ef1"},
+    {name:"은퇴 잔고 (1/5)",values:rVals,color:"#19a974"}
+  ],lbls);
 }
 
-function renderAiMessages(scrollToBottom) {
-  const container = document.getElementById("aiMessages");
-  const welcome = document.getElementById("aiWelcome");
-
-  // Clear existing messages (keep welcome div)
-  Array.from(container.children).forEach(child => {
-    if (child.id !== "aiWelcome") child.remove();
-  });
-
-  aiMessages.forEach(msg => {
-    const isUser = msg.role === "user";
-    const div = document.createElement("div");
-    div.style.cssText = `
-      padding:12px 16px;border-radius:12px;font-size:14px;line-height:1.6;
-      max-width:85%;word-break:break-word;white-space:pre-wrap;
-      ${isUser
-        ? "background:var(--blue);color:white;align-self:flex-end;border-bottom-right-radius:4px"
-        : "background:white;color:var(--ink);align-self:flex-start;border:1px solid var(--line);border-bottom-left-radius:4px"}
-    `;
-    div.textContent = msg.content;
-    container.appendChild(div);
-  });
-
-  if (scrollToBottom) {
-    container.scrollTop = container.scrollHeight;
-  }
-}
+// Page: AI
+let chatHistory=[];
 
 function initAiPage() {
-  const key = getAiKey();
-  const pill = document.getElementById("aiStatusPill");
-  const keyMask = document.getElementById("aiKeyMask");
-  const input = document.getElementById("aiInput");
-  const sendBtn = document.getElementById("aiSend");
-
-  if (key) {
-    pill.textContent = "연결됨 ✓";
-    pill.style.background = "var(--green)";
-    pill.style.color = "white";
-    keyMask.textContent = key.slice(0, 10) + "..." + key.slice(-4);
-    input.disabled = false;
-    sendBtn.disabled = false;
+  const key=localStorage.getItem(SK_APIKEY)||"";
+  const mask=document.getElementById("apiKeyMask");
+  const status=document.getElementById("apiStatus");
+  const inp=document.getElementById("chatInput");
+  const btn=document.getElementById("btnSend");
+  if(key){
+    mask.textContent="연결됨 "+key.slice(0,10)+"…"+key.slice(-4);
+    status.textContent="✓ 연결됨"; status.className="save-badge saved";
+    inp.disabled=false; btn.disabled=false;
   } else {
-    pill.textContent = "미연결";
-    pill.style.background = "";
-    pill.style.color = "";
-    keyMask.textContent = "—";
-    input.disabled = true;
-    sendBtn.disabled = true;
+    mask.textContent="";
+    status.textContent="미연결"; status.className="save-badge";
+    inp.disabled=true; btn.disabled=true;
   }
-
-  // Suggested questions
-  const suggestions = [
-    "아들 등록금과 집 구매를 어떻게 우선순위를 정해야 할까요?",
-    "은퇴까지 얼마나 더 저축해야 할까요?",
-    "지금 주식을 팔아서 등록금을 낼까요, 401k를 써야 할까요?",
-    "비상금이 충분한가요?",
-    "집 구매 타이밍이 언제가 좋을까요?"
-  ];
-  const sugEl = document.getElementById("aiSuggestions");
-  if (sugEl) {
-    sugEl.innerHTML = suggestions.map(s => `
-      <button onclick="document.getElementById('aiInput').value=${JSON.stringify(s)};document.getElementById('aiInput').focus()" style="
-        padding:8px 14px;border-radius:20px;border:1.5px solid var(--line);
-        background:white;font-size:12px;cursor:pointer;color:var(--ink);
-        transition:border-color 0.2s
-      " onmouseover="this.style.borderColor='var(--blue)'" onmouseout="this.style.borderColor='var(--line)'">${s}</button>
-    `).join("");
-  }
+  const suggs=["지금 자산으로 집을 살 수 있을까요?","등록금과 집 구매 중 어떤 걸 먼저?","은퇴까지 얼마나 더 저축해야 할까요?","401k와 IRA를 어떻게 운영해야 할까요?","지금 팔아야 할 주식이 있나요?"];
+  document.getElementById("chatSuggestions").innerHTML=suggs.map(s=>`<button class="suggest-btn" onclick="document.getElementById('chatInput').value=${JSON.stringify(s)};document.getElementById('chatInput').focus()">${s}</button>`).join("");
 }
 
-document.getElementById("aiSaveKey").addEventListener("click", () => {
-  const val = document.getElementById("aiApiKey").value.trim();
-  if (!val.startsWith("sk-ant-")) {
-    alert("올바른 Anthropic API 키를 입력해주세요. (sk-ant-로 시작)");
-    return;
-  }
-  localStorage.setItem(AI_KEY_STORAGE, val);
-  document.getElementById("aiApiKey").value = "";
-  initAiPage();
-});
+function buildContext() {
+  const stocks=loadStocks();
+  const alloc=calcAllocation(stocks);
+  const nw=calcNetWorth(stocks);
+  const cf=calcCashFlow();
+  const mtg=calcMortgage();
+  const tv=calcStockTotal(stocks);
+  const losers=stocks.filter(s=>s.currentPrice<s.costBasis);
+  return `당신은 Terry 가족의 개인 재무 어드바이저입니다. 아래 실제 재무 데이터 기반으로 한국어로 구체적이고 친절하게 답변해주세요.
 
-document.getElementById("aiClearKey").addEventListener("click", () => {
-  if (confirm("API 키를 삭제할까요?")) {
-    localStorage.removeItem(AI_KEY_STORAGE);
-    initAiPage();
-  }
-});
+## 자산 (순자산 ${money(nw,true)})
+- 현금: ${money(S.cash,true)} | 주식: ${money(tv,true)} (${stocks.map(s=>`${s.ticker} ${s.shares}주@$${s.currentPrice}`).join(", ")})
+- 401k: ${money(S.k401,true)} (내기여 ${pct(S.k401MyPct)}, 매칭 ${pct(S.k401MatchPct)}) | ${S.iraType} IRA: ${money(S.ira,true)}
+- 부동산: ${money(S.homeEquity,true)} | 부채: ${money(S.debts,true)}
+- 손실종목: ${losers.length?losers.map(s=>s.ticker).join(", "):"없음"}
 
-document.getElementById("aiClearChat").addEventListener("click", () => {
-  aiMessages = [];
-  renderAiMessages(false);
-  const welcome = document.getElementById("aiWelcome");
-  if (welcome) welcome.style.display = "";
-  initAiPage();
-});
+## 현금흐름
+- 월소득: ${money(S.income)} | 지출: ${money(S.expenses)} | 401k: ${money(S.k401Contrib)} | 잉여: ${money(cf)}
 
-document.getElementById("aiSend").addEventListener("click", sendAiMessage);
-document.getElementById("aiInput").addEventListener("keydown", e => {
-  if (e.key === "Enter" && !e.shiftKey) {
-    e.preventDefault();
-    sendAiMessage();
-  }
-});
+## 자산배분
+- 주식 ${pct(alloc.stocksPct)}(목표 ${pct(S.targetStocks)}) | 채권 ${pct(alloc.bondsPct)}(목표 ${pct(S.targetBonds)}) | 현금 ${pct(alloc.cashPct)}(목표 ${pct(S.targetCash)})
 
-// Add pulse animation for loading
-const pulseStyle = document.createElement("style");
-pulseStyle.textContent = `@keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.3} }`;
-document.head.appendChild(pulseStyle);
+## 목표
+- 대학(${S.collegeYears}년후): 연 ${money(S.collegeCost)}, 저축 ${money(S.collegeFund)}
+- 주택(${S.houseDelay}년후): ${money(S.housePrice)}, 다운 ${money(S.houseDown)}, 월모기지 ${money(mtg.total)}
+- 은퇴(${S.retireAge}세): 현재 ${S.currentAge}세, ${Math.max(S.retireAge-S.currentAge,0)}년 후`;
+}
 
-// ── Investment Portfolio ──────────────────────────────────────────────
-const STOCKS_KEY = "terry-finance-stocks-v1";
-
-function loadStocks() {
+async function sendMessage() {
+  const inp=document.getElementById("chatInput");
+  const text=inp.value.trim();
+  if(!text) return;
+  const key=localStorage.getItem(SK_APIKEY);
+  if(!key){alert("API 키를 먼저 입력해주세요.");return;}
+  inp.value=""; inp.disabled=true; document.getElementById("btnSend").disabled=true;
+  const welcome=document.getElementById("chatWelcome");
+  if(welcome) welcome.style.display="none";
+  chatHistory.push({role:"user",content:text});
+  renderChat();
+  const loading=document.createElement("div");
+  loading.className="chat-bubble bubble-loading";
+  loading.innerHTML=`<span style="animation:pulse 1s infinite;display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--blue)"></span> 분석 중...`;
+  document.getElementById("chatMessages").appendChild(loading);
+  document.getElementById("chatMessages").scrollTop=99999;
   try {
-    const saved = JSON.parse(localStorage.getItem(STOCKS_KEY));
-    return saved && saved.length > 0 ? saved : sampleData.stocks.map(s => ({ ...s }));
-  } catch { return sampleData.stocks.map(s => ({ ...s })); }
-}
-
-function saveStocks(stocks) {
-  localStorage.setItem(STOCKS_KEY, JSON.stringify(stocks));
-}
-
-function getAccountsState() {
-  return state.accounts || sampleData.accounts;
-}
-
-function getInvestmentCalc() {
-  const stocks = loadStocks();
-  const acc = getAccountsState();
-
-  const totalStockValue = stocks.reduce((s, st) => s + st.shares * st.currentPrice, 0);
-  const totalCostBasis = stocks.reduce((s, st) => s + st.shares * st.costBasis, 0);
-  const totalGainLoss = totalStockValue - totalCostBasis;
-
-  // asset allocation across all accounts
-  const k401Total = acc.k401.balance;
-  const iraTotal = acc.ira.balance;
-  const taxableTotal = totalStockValue;
-  const cashTotal = state.household.cash;
-  const grandTotal = k401Total + iraTotal + taxableTotal + cashTotal;
-
-  function fundsToAllocation(funds, totalBalance) {
-    let stocks = 0, bonds = 0, cash = 0;
-    funds.forEach(f => {
-      const val = totalBalance * f.pct / 100;
-      if (f.type === "stock") stocks += val;
-      else if (f.type === "bond") bonds += val;
-      else cash += val;
+    const res=await fetch("https://api.anthropic.com/v1/messages",{
+      method:"POST",
+      headers:{"Content-Type":"application/json","x-api-key":key,"anthropic-version":"2023-06-01","anthropic-dangerous-direct-browser-access":"true"},
+      body:JSON.stringify({model:"claude-haiku-4-5-20251001",max_tokens:1024,system:buildContext(),messages:chatHistory})
     });
-    return { stocks, bonds, cash };
+    if(!res.ok){const e=await res.json().catch(()=>{});throw new Error(e?.error?.message||`오류 ${res.status}`);}
+    const data=await res.json();
+    const reply=data.content?.[0]?.text||"(응답 없음)";
+    chatHistory.push({role:"assistant",content:reply});
+    loading.remove(); renderChat();
+  } catch(e) {
+    loading.remove(); chatHistory.pop();
+    const d=document.createElement("div");
+    d.className="chat-bubble bubble-ai";
+    d.style.cssText="color:var(--red);background:#fff2f2;border-color:#fca5a5";
+    d.textContent="오류: "+e.message;
+    document.getElementById("chatMessages").appendChild(d);
+  } finally {
+    inp.disabled=false; document.getElementById("btnSend").disabled=false; inp.focus();
   }
-
-  const k401Alloc = fundsToAllocation(acc.k401.funds, k401Total);
-  const iraAlloc = fundsToAllocation(acc.ira.funds, iraTotal);
-  const totalStocks = k401Alloc.stocks + iraAlloc.stocks + taxableTotal;
-  const totalBonds = k401Alloc.bonds + iraAlloc.bonds;
-  const totalCash = k401Alloc.cash + iraAlloc.cash + cashTotal;
-  const totalAssets = totalStocks + totalBonds + totalCash;
-
-  const stocksPct = totalAssets > 0 ? (totalStocks / totalAssets) * 100 : 0;
-  const bondsPct = totalAssets > 0 ? (totalBonds / totalAssets) * 100 : 0;
-  const cashPct = totalAssets > 0 ? (totalCash / totalAssets) * 100 : 0;
-
-  const target = acc.target;
-  const stocksDrift = stocksPct - target.stocks;
-  const bondsDrift = bondsPct - target.bonds;
-  const cashDrift = cashPct - target.cash;
-
-  // 401k annual contribution
-  const annualSalary = state.household.monthlyIncome * 12;
-  const myContrib = annualSalary * acc.k401.myContribPct / 100;
-  const employerContrib = annualSalary * Math.min(acc.k401.myContribPct, acc.k401.employerMatchPct) / 100;
-
-  return {
-    stocks, totalStockValue, totalCostBasis, totalGainLoss,
-    k401Total, iraTotal, taxableTotal, cashTotal, grandTotal,
-    totalStocks, totalBonds, totalCash, totalAssets,
-    stocksPct, bondsPct, cashPct,
-    stocksDrift, bondsDrift, cashDrift,
-    myContrib, employerContrib
-  };
 }
 
-function renderInvestments() {
-  const el = document.getElementById("page-investments");
-  if (!el) return;
-
-  const acc = getAccountsState();
-  const calc = getInvestmentCalc();
-  const stocks = calc.stocks;
-
-  const sectorColors = {
-    Technology: "#276ef1", "Real Estate": "#7c5cff",
-    Industrials: "#14b8c4", Energy: "#d99000", Healthcare: "#19a974",
-    Financials: "#d94b4b", "Consumer": "#ff9900"
-  };
-
-  // Drift status helper
-  function driftBadge(drift) {
-    const abs = Math.abs(drift);
-    if (abs < 3) return `<span style="color:var(--green);font-weight:700">±${abs.toFixed(1)}% 균형</span>`;
-    if (abs < 8) return `<span style="color:var(--amber);font-weight:700">${drift > 0 ? "+" : ""}${drift.toFixed(1)}% 주의</span>`;
-    return `<span style="color:var(--red);font-weight:700">${drift > 0 ? "+" : ""}${drift.toFixed(1)}% 리밸런싱 필요</span>`;
-  }
-
-  el.innerHTML = `
-    <!-- 1. 포트폴리오 요약 -->
-    <div class="metric-grid" style="margin-bottom:18px">
-      ${[
-        ["총 투자 자산", money(calc.grandTotal, true), "현금 포함 전체"],
-        ["401k 잔고", money(calc.k401Total, true), "세전 은퇴 계좌"],
-        ["IRA 잔고 (${acc.ira.type})", money(calc.iraTotal, true), acc.ira.type + " IRA"],
-        ["주식 계좌", money(calc.taxableTotal, true), `${stocks.length}개 종목`],
-        ["총 평가손익", (calc.totalGainLoss >= 0 ? "+" : "") + money(calc.totalGainLoss, true), calc.totalCostBasis > 0 ? ((calc.totalGainLoss / calc.totalCostBasis) * 100).toFixed(1) + "% 수익률" : "—"],
-        ["고용주 매칭", money(calc.employerContrib, true), `연간 (${acc.k401.employerMatchPct}% match)`]
-      ].map(([t, v, s]) => `<article class="metric-card"><span>${t}</span><strong style="color:${t === "총 평가손익" && calc.totalGainLoss >= 0 ? "var(--green)" : t === "총 평가손익" ? "var(--red)" : ""}">${v}</strong><small>${s}</small></article>`).join("")}
-    </div>
-
-    <div class="dashboard-grid" style="margin-bottom:18px">
-      <!-- 2. 자산 배분 도넛 -->
-      <article class="panel">
-        <div class="panel-heading"><div><p class="eyebrow">전체 자산 배분</p><h2>Asset Allocation</h2></div></div>
-        <canvas id="allocDonut" height="220"></canvas>
-        <div style="margin-top:16px;display:grid;gap:8px">
-          ${[
-            ["주식 (Stocks)", calc.stocksPct, calc.totalStocks, acc.target.stocks, calc.stocksDrift],
-            ["채권 (Bonds)", calc.bondsPct, calc.totalBonds, acc.target.bonds, calc.bondsDrift],
-            ["현금 (Cash)", calc.cashPct, calc.totalCash, acc.target.cash, calc.cashDrift]
-          ].map(([label, pct, val, target, drift]) => `
-            <div style="display:grid;grid-template-columns:1fr auto auto;gap:8px;align-items:center;font-size:13px">
-              <span>${label}</span>
-              <span style="color:var(--muted)">${pct.toFixed(1)}% (목표 ${target}%)</span>
-              ${driftBadge(drift)}
-            </div>
-            <div style="height:6px;background:var(--line);border-radius:4px;margin-bottom:4px">
-              <div style="height:6px;border-radius:4px;background:var(--blue);width:${Math.min(pct, 100)}%"></div>
-            </div>
-          `).join("")}
-        </div>
-      </article>
-
-      <!-- 3. 계좌별 비중 -->
-      <article class="panel wide">
-        <div class="panel-heading"><div><p class="eyebrow">계좌별 현황</p><h2>Account Breakdown</h2></div></div>
-        <canvas id="accountChart" height="200"></canvas>
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:16px">
-          <!-- 401k -->
-          <div style="padding:16px;border-radius:10px;background:var(--soft);border:1px solid var(--line)">
-            <p class="eyebrow" style="margin:0 0 8px">401k</p>
-            <strong style="font-size:20px;display:block;margin-bottom:12px">${money(calc.k401Total)}</strong>
-            ${acc.k401.funds.map(f => `
-              <div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:6px">
-                <span style="color:var(--muted)">${f.name}</span>
-                <strong>${f.pct}%</strong>
-              </div>
-              <div style="height:4px;background:var(--line);border-radius:2px;margin-bottom:8px">
-                <div style="height:4px;border-radius:2px;background:${f.type==="stock"?"var(--blue)":f.type==="bond"?"var(--cyan)":"var(--green)"};width:${f.pct}%"></div>
-              </div>
-            `).join("")}
-            <div style="margin-top:12px;font-size:12px;color:var(--muted)">
-              내 기여율: <strong>${acc.k401.myContribPct}%</strong> ·
-              고용주 매칭: <strong>${acc.k401.employerMatchPct}%</strong>
-            </div>
-            <div style="margin-top:4px;font-size:12px;color:var(--muted)">
-              연간 내 기여: <strong style="color:var(--ink)">${money(calc.myContrib)}</strong> ·
-              매칭: <strong style="color:var(--green)">${money(calc.employerContrib)}</strong>
-            </div>
-          </div>
-          <!-- IRA -->
-          <div style="padding:16px;border-radius:10px;background:var(--soft);border:1px solid var(--line)">
-            <p class="eyebrow" style="margin:0 0 8px">${acc.ira.type} IRA</p>
-            <strong style="font-size:20px;display:block;margin-bottom:12px">${money(calc.iraTotal)}</strong>
-            ${acc.ira.funds.map(f => `
-              <div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:6px">
-                <span style="color:var(--muted)">${f.name}</span>
-                <strong>${f.pct}%</strong>
-              </div>
-              <div style="height:4px;background:var(--line);border-radius:2px;margin-bottom:8px">
-                <div style="height:4px;border-radius:2px;background:${f.type==="stock"?"var(--blue)":f.type==="bond"?"var(--cyan)":"var(--green)"};width:${f.pct}%"></div>
-              </div>
-            `).join("")}
-            <div style="margin-top:12px;font-size:12px;color:var(--muted)">
-              연간 기여 한도: <strong>${money(acc.ira.annualContrib)}</strong> (50세 이상 캐치업 포함)
-            </div>
-            <div style="margin-top:4px;font-size:12px">
-              ${acc.ira.type === "Roth"
-                ? `<span style="color:var(--green)">✓ Roth: 인출 시 비과세</span>`
-                : `<span style="color:var(--amber)">Traditional: 인출 시 과세</span>`}
-            </div>
-          </div>
-        </div>
-      </article>
-    </div>
-
-    <!-- 4. 개별 주식 -->
-    <article class="panel" style="margin-bottom:18px">
-      <div class="panel-heading">
-        <div><p class="eyebrow">개별 주식 계좌 (Taxable)</p><h2>Stock Holdings</h2></div>
-        <button class="secondary-button" id="addStockBtn" type="button">+ 종목 추가</button>
-      </div>
-      <div class="table-wrap" style="margin-top:16px">
-        <table>
-          <thead>
-            <tr>
-              <th>종목</th><th>이름</th><th>섹터</th>
-              <th style="text-align:right">수량</th>
-              <th style="text-align:right">매입가</th>
-              <th style="text-align:right">현재가</th>
-              <th style="text-align:right">평가금액</th>
-              <th style="text-align:right">손익</th>
-              <th style="text-align:right">수익률</th>
-              <th></th>
-            </tr>
-          </thead>
-          <tbody id="stocksTableBody">
-            ${stocks.map(st => {
-              const mktVal = st.shares * st.currentPrice;
-              const costTotal = st.shares * st.costBasis;
-              const gl = mktVal - costTotal;
-              const glPct = costTotal > 0 ? (gl / costTotal) * 100 : 0;
-              const color = gl >= 0 ? "var(--green)" : "var(--red)";
-              return `<tr data-stock-id="${st.id}">
-                <td><strong style="color:var(--blue)">${st.ticker}</strong></td>
-                <td style="font-size:13px;color:var(--muted)">${st.name}</td>
-                <td><span style="padding:2px 8px;border-radius:4px;background:${sectorColors[st.sector] || "var(--muted)"}22;color:${sectorColors[st.sector] || "var(--muted)"};font-size:11px;font-weight:700">${st.sector}</span></td>
-                <td style="text-align:right"><input type="number" class="stock-edit" data-id="${st.id}" data-field="shares" value="${st.shares}" style="width:70px;text-align:right;border:1px solid var(--line);border-radius:6px;padding:4px 8px;font-size:13px" /></td>
-                <td style="text-align:right"><input type="number" class="stock-edit" data-id="${st.id}" data-field="costBasis" value="${st.costBasis}" step="0.01" style="width:90px;text-align:right;border:1px solid var(--line);border-radius:6px;padding:4px 8px;font-size:13px" /></td>
-                <td style="text-align:right"><input type="number" class="stock-edit" data-id="${st.id}" data-field="currentPrice" value="${st.currentPrice}" step="0.01" style="width:90px;text-align:right;border:1px solid var(--line);border-radius:6px;padding:4px 8px;font-size:13px" /></td>
-                <td style="text-align:right;font-weight:700">${money(mktVal)}</td>
-                <td style="text-align:right;font-weight:700;color:${color}">${gl >= 0 ? "+" : ""}${money(gl)}</td>
-                <td style="text-align:right;font-weight:700;color:${color}">${glPct >= 0 ? "+" : ""}${glPct.toFixed(1)}%</td>
-                <td><button onclick="deleteStock(${st.id})" style="border:0;background:none;cursor:pointer;color:var(--muted);font-size:18px;line-height:1" title="삭제">×</button></td>
-              </tr>`;
-            }).join("")}
-          </tbody>
-          <tfoot>
-            <tr style="font-weight:800;background:var(--soft)">
-              <td colspan="6">합계</td>
-              <td style="text-align:right">${money(calc.totalStockValue)}</td>
-              <td style="text-align:right;color:${calc.totalGainLoss >= 0 ? "var(--green)" : "var(--red)"}">
-                ${calc.totalGainLoss >= 0 ? "+" : ""}${money(calc.totalGainLoss)}
-              </td>
-              <td style="text-align:right;color:${calc.totalGainLoss >= 0 ? "var(--green)" : "var(--red)"}">
-                ${calc.totalCostBasis > 0 ? ((calc.totalGainLoss / calc.totalCostBasis) * 100).toFixed(1) + "%" : "—"}
-              </td>
-              <td></td>
-            </tr>
-          </tfoot>
-        </table>
-      </div>
-    </article>
-
-    <!-- 5. 리밸런싱 추천 -->
-    <article class="panel" style="margin-bottom:18px">
-      <div class="panel-heading"><div><p class="eyebrow">리밸런싱 가이드</p><h2>Rebalancing Recommendations</h2></div></div>
-      <div id="rebalanceGuide" style="margin-top:16px;display:grid;gap:12px"></div>
-    </article>
-
-    <!-- 6. 종목 추가 모달 -->
-    <div id="addStockModal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.4);z-index:200;align-items:center;justify-content:center">
-      <div style="background:white;border-radius:16px;padding:28px;width:min(420px,90vw);box-shadow:0 40px 80px rgba(0,0,0,0.2)">
-        <h3 style="margin:0 0 20px">종목 추가</h3>
-        <div style="display:grid;gap:14px">
-          <div class="field"><label for="ns_ticker"><span>티커 (Ticker)</span></label><input id="ns_ticker" type="text" placeholder="AAPL" style="text-transform:uppercase;font-weight:700"/></div>
-          <div class="field"><label for="ns_name"><span>종목명</span></label><input id="ns_name" type="text" placeholder="Apple Inc"/></div>
-          <div class="field"><label for="ns_sector"><span>섹터</span></label>
-            <select id="ns_sector" style="min-height:42px;border:1px solid var(--line);border-radius:8px;padding:0 12px;font-weight:700;background:#fbfcfe">
-              <option>Technology</option><option>Financials</option><option>Healthcare</option>
-              <option>Consumer</option><option>Industrials</option><option>Energy</option>
-              <option>Real Estate</option><option>Utilities</option><option>Materials</option>
-            </select>
-          </div>
-          <div class="field"><label for="ns_shares"><span>수량 (Shares)</span></label><input id="ns_shares" type="number" min="0.001" step="0.001" placeholder="100"/></div>
-          <div class="field"><label for="ns_cost"><span>평균 매입가 ($)</span></label><input id="ns_cost" type="number" min="0" step="0.01" placeholder="150.00"/></div>
-          <div class="field"><label for="ns_price"><span>현재 주가 ($)</span></label><input id="ns_price" type="number" min="0" step="0.01" placeholder="180.00"/></div>
-        </div>
-        <div style="display:flex;gap:10px;margin-top:20px;justify-content:flex-end">
-          <button class="secondary-button" id="cancelStockBtn" type="button">취소</button>
-          <button class="primary-button" id="saveStockBtn" type="button">추가</button>
-        </div>
-      </div>
-    </div>
-  `;
-
-  // Draw charts after DOM is set
-  requestAnimationFrame(() => {
-    drawDonut("allocDonut", [
-      { name: "주식", value: calc.totalStocks, color: "#276ef1" },
-      { name: "채권", value: calc.totalBonds, color: "#14b8c4" },
-      { name: "현금", value: calc.totalCash, color: "#19a974" }
-    ]);
-    drawChart("accountChart", [
-      { name: "401k", values: [calc.k401Total], color: "#276ef1" },
-      { name: "IRA", values: [calc.iraTotal], color: "#7c5cff" },
-      { name: "Taxable", values: [calc.taxableTotal], color: "#14b8c4" },
-      { name: "Cash", values: [calc.cashTotal], color: "#19a974" }
-    ], ["계좌 유형"], { legend: true });
-
-    // Rebalancing guide
-    const target = acc.target;
-    const guide = [];
-    if (Math.abs(calc.stocksDrift) >= 3) {
-      const adjAmt = Math.abs(calc.stocksDrift / 100) * calc.totalAssets;
-      guide.push({
-        action: calc.stocksDrift > 0 ? "주식 비중 축소" : "주식 비중 확대",
-        detail: calc.stocksDrift > 0
-          ? `현재 ${calc.stocksPct.toFixed(1)}% → 목표 ${target.stocks}%. 약 ${money(adjAmt, true)}를 채권/현금으로 이동하세요.`
-          : `현재 ${calc.stocksPct.toFixed(1)}% → 목표 ${target.stocks}%. 약 ${money(adjAmt, true)}를 주식으로 추가 투자하세요.`,
-        color: calc.stocksDrift > 3 ? "var(--amber)" : "var(--green)"
-      });
-    }
-    if (Math.abs(calc.bondsDrift) >= 3) {
-      const adjAmt = Math.abs(calc.bondsDrift / 100) * calc.totalAssets;
-      guide.push({
-        action: calc.bondsDrift > 0 ? "채권 비중 축소" : "채권 비중 확대",
-        detail: `현재 ${calc.bondsPct.toFixed(1)}% → 목표 ${target.bonds}%. 약 ${money(adjAmt, true)} 조정 필요.`,
-        color: "var(--amber)"
-      });
-    }
-    const lossStocks = stocks.filter(s => s.currentPrice < s.costBasis);
-    if (lossStocks.length > 0) {
-      guide.push({
-        action: "세금 손실 확정 (Tax-Loss Harvesting) 기회",
-        detail: `손실 종목: ${lossStocks.map(s => s.ticker).join(", ")}. 매도 후 손실을 다른 자본이득과 상쇄할 수 있습니다.`,
-        color: "var(--blue)"
-      });
-    }
-    if (guide.length === 0) {
-      guide.push({ action: "✅ 포트폴리오 균형 양호", detail: "현재 자산 배분이 목표 범위 내에 있습니다. 정기적으로 점검하세요.", color: "var(--green)" });
-    }
-    // 401k match check
-    if (acc.k401.myContribPct < acc.k401.employerMatchPct) {
-      guide.push({
-        action: "⚠️ 고용주 매칭 미활용",
-        detail: `현재 기여율 ${acc.k401.myContribPct}%는 고용주 매칭 ${acc.k401.employerMatchPct}%에 미치지 못합니다. 기여율을 올리면 연 ${money(calc.employerContrib)}의 무료 보너스를 받을 수 있어요.`,
-        color: "var(--red)"
-      });
-    }
-
-    document.getElementById("rebalanceGuide").innerHTML = guide.map(g => `
-      <div style="padding:14px 16px;border-radius:10px;border-left:4px solid ${g.color};background:${g.color}11;display:grid;gap:4px">
-        <strong style="color:${g.color}">${g.action}</strong>
-        <span style="font-size:13px;color:var(--ink)">${g.detail}</span>
-      </div>
-    `).join("");
-
-    // Stock edit listeners
-    document.querySelectorAll(".stock-edit").forEach(input => {
-      input.addEventListener("change", () => {
-        const id = Number(input.dataset.id);
-        const field = input.dataset.field;
-        const stocks = loadStocks();
-        const st = stocks.find(s => s.id === id);
-        if (st) {
-          st[field] = Number(input.value) || 0;
-          saveStocks(stocks);
-          // Sync total to household investments
-          const total = stocks.reduce((s, x) => s + x.shares * x.currentPrice, 0);
-          state.household.investments = Math.round(total);
-          setSaveStatus(true);
-          renderInvestments();
-        }
-      });
-    });
-
-    // Add stock modal
-    document.getElementById("addStockBtn").addEventListener("click", () => {
-      document.getElementById("addStockModal").style.display = "flex";
-    });
-    document.getElementById("cancelStockBtn").addEventListener("click", () => {
-      document.getElementById("addStockModal").style.display = "none";
-    });
-    document.getElementById("saveStockBtn").addEventListener("click", () => {
-      const ticker = document.getElementById("ns_ticker").value.trim().toUpperCase();
-      const name = document.getElementById("ns_name").value.trim();
-      const shares = Number(document.getElementById("ns_shares").value);
-      const costBasis = Number(document.getElementById("ns_cost").value);
-      const currentPrice = Number(document.getElementById("ns_price").value);
-      const sector = document.getElementById("ns_sector").value;
-      if (!ticker || shares <= 0 || currentPrice <= 0) return;
-      const stocks = loadStocks();
-      const newId = Math.max(0, ...stocks.map(s => s.id)) + 1;
-      stocks.push({ id: newId, ticker, name: name || ticker, shares, costBasis, currentPrice, sector });
-      saveStocks(stocks);
-      state.household.investments = Math.round(stocks.reduce((s, x) => s + x.shares * x.currentPrice, 0));
-      setSaveStatus(true);
-      document.getElementById("addStockModal").style.display = "none";
-      renderInvestments();
-    });
+function renderChat() {
+  const c=document.getElementById("chatMessages");
+  Array.from(c.children).forEach(x=>{if(x.id!=="chatWelcome") x.remove();});
+  chatHistory.forEach(m=>{
+    const d=document.createElement("div");
+    d.className="chat-bubble "+(m.role==="user"?"bubble-user":"bubble-ai");
+    d.textContent=m.content; c.appendChild(d);
   });
+  c.scrollTop=99999;
 }
 
-window.deleteStock = function(id) {
-  if (!confirm("이 종목을 삭제할까요?")) return;
-  const stocks = loadStocks().filter(s => s.id !== id);
-  saveStocks(stocks);
-  state.household.investments = Math.round(stocks.reduce((s, x) => s + x.shares * x.currentPrice, 0));
-  setSaveStatus(true);
-  renderInvestments();
-};
+function render() {
+  if(currentPage==="assets") renderAssets();
+  if(currentPage==="invest") renderInvest();
+  if(currentPage==="goals")  renderGoals();
+}
 
-renderNav();
-setPage(currentPage);
-setSaveStatus(false);
+// Init
+document.addEventListener("DOMContentLoaded",()=>{
+  const pad=document.getElementById("pinPad");
+  [1,2,3,4,5,6,7,8,9,"",0,"⌫"].forEach(k=>{
+    const btn=document.createElement("button");
+    btn.textContent=k; btn.className="pin-key"+(k===""?" empty":"");
+    if(k!=="") btn.onclick=()=>pinPress(String(k));
+    pad.appendChild(btn);
+  });
+  initPin();
+  buildNav();
+  setPage("assets");
+  setSaved(true);
+
+  document.getElementById("btnSave").addEventListener("click",()=>{ saveState(); saveStocks(loadStocks()); setSaved(true); });
+  document.getElementById("btnReset").addEventListener("click",()=>{
+    if(!confirm("모든 데이터를 초기값으로 되돌릴까요?")) return;
+    localStorage.removeItem(SK_STATE); localStorage.removeItem(SK_STOCKS);
+    S=loadState(); markDirty(); render();
+  });
+  document.getElementById("btnSaveKey").addEventListener("click",()=>{
+    const v=document.getElementById("apiKeyInput").value.trim();
+    if(!v.startsWith("sk-ant-")){alert("올바른 API 키를 입력해주세요 (sk-ant-로 시작).");return;}
+    localStorage.setItem(SK_APIKEY,v); document.getElementById("apiKeyInput").value=""; initAiPage();
+  });
+  document.getElementById("btnClearKey").addEventListener("click",()=>{
+    if(confirm("API 키를 삭제할까요?")){ localStorage.removeItem(SK_APIKEY); initAiPage(); }
+  });
+  document.getElementById("btnSend").addEventListener("click",sendMessage);
+  document.getElementById("chatInput").addEventListener("keydown",e=>{
+    if(e.key==="Enter"&&!e.shiftKey){e.preventDefault();sendMessage();}
+  });
+  document.getElementById("btnAddStock").addEventListener("click",()=>document.getElementById("stockModal").classList.add("open"));
+  document.getElementById("btnCancelStock").addEventListener("click",()=>document.getElementById("stockModal").classList.remove("open"));
+  document.getElementById("btnConfirmStock").addEventListener("click",()=>{
+    const ticker=document.getElementById("ms_ticker").value.trim().toUpperCase();
+    const name=document.getElementById("ms_name").value.trim();
+    const sector=document.getElementById("ms_sector").value;
+    const shares=Number(document.getElementById("ms_shares").value);
+    const cost=Number(document.getElementById("ms_cost").value);
+    const price=Number(document.getElementById("ms_price").value);
+    if(!ticker||shares<=0||price<=0){alert("티커, 수량, 현재가를 입력해주세요.");return;}
+    const arr=loadStocks();
+    arr.push({id:Date.now(),ticker,name:name||ticker,sector,shares,costBasis:cost,currentPrice:price});
+    saveStocks(arr);
+    document.getElementById("stockModal").classList.remove("open");
+    ["ms_ticker","ms_name","ms_shares","ms_cost","ms_price"].forEach(id=>document.getElementById(id).value="");
+    markDirty(); render();
+  });
+  window.addEventListener("resize",render);
+});
