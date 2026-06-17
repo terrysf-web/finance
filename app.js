@@ -1,9 +1,11 @@
 // ── Version ──
-const APP_VERSION = "1.2.0";
+const APP_VERSION = "1.3.0";
 
 // ── Storage keys ──
-const SK_STATE    = "tf-state-v2";
-const SK_STOCKS   = "tf-stocks-v2";
+const SK_STATE     = "tf-state-v2";
+const SK_STOCKS    = "tf-stocks-v2";
+const SK_BILLS     = "tf-bills-v1";
+const SK_BILLCHECK = "tf-billcheck-v1";
 const SK_PIN      = "tf-pin-v2";
 const SK_UNLOCKED = "tf-session";
 const SK_APIKEY   = "tf-apikey";
@@ -66,6 +68,15 @@ const DEFAULT = {
   retireWithdraw:     4.0
 };
 
+const DEFAULT_BILLS = [
+  { id: 1, name: "렌트 / 모기지",   amount: 0, dueDay: 1,  category: "주거"    },
+  { id: 2, name: "전기세",          amount: 0, dueDay: 15, category: "유틸리티" },
+  { id: 3, name: "가스",            amount: 0, dueDay: 15, category: "유틸리티" },
+  { id: 4, name: "인터넷",          amount: 0, dueDay: 20, category: "유틸리티" },
+  { id: 5, name: "자동차 보험",     amount: 0, dueDay: 1,  category: "보험"    },
+  { id: 6, name: "핸드폰",          amount: 0, dueDay: 10, category: "통신"    }
+];
+
 const DEFAULT_STOCKS = [
   { id:1, ticker:"NVDA", name:"NVIDIA Corp",       shares:25,  costBasis:82.50,  currentPrice:215.40, sector:"Technology"  },
   { id:2, ticker:"AVGO", name:"Broadcom Inc",       shares:18,  costBasis:142.00, currentPrice:178.20, sector:"Technology"  },
@@ -104,6 +115,27 @@ function loadStocks() {
   } catch { return DEFAULT_STOCKS.map(x => ({ ...x })); }
 }
 function saveStocks(arr) { localStorage.setItem(SK_STOCKS, JSON.stringify(arr)); }
+
+function loadBills() {
+  try {
+    const s = JSON.parse(localStorage.getItem(SK_BILLS));
+    return s && s.length ? s : DEFAULT_BILLS.map(b => ({...b}));
+  } catch { return DEFAULT_BILLS.map(b => ({...b})); }
+}
+function saveBills(arr) { localStorage.setItem(SK_BILLS, JSON.stringify(arr)); }
+function loadBillCheck(monthKey) {
+  try {
+    const all = JSON.parse(localStorage.getItem(SK_BILLCHECK)) || {};
+    return new Set(all[monthKey] || []);
+  } catch { return new Set(); }
+}
+function saveBillCheck(monthKey, paidSet) {
+  try {
+    const all = JSON.parse(localStorage.getItem(SK_BILLCHECK)) || {};
+    all[monthKey] = [...paidSet];
+    localStorage.setItem(SK_BILLCHECK, JSON.stringify(all));
+  } catch {}
+}
 
 let S = loadState();
 let dirty = false;
@@ -462,6 +494,8 @@ function renderAssets() {
     <div><div class="sr-label">월 잉여 현금</div><div class="sr-value" style="color:${cfColor}">${money(cf)}</div></div>
     <div><div class="sr-label">연 저축 예상</div><div class="sr-value">${money(Math.max(cf,0)*12, true)}</div></div>
     <div><div class="sr-label">저축률</div><div class="sr-value">${pct(S.income > 0 ? (S.k401Contrib+S.collegeSave+Math.max(cf,0))/S.income*100 : 0)}</div></div>`;
+
+  renderBills();
 }
 
 // ── Page: 투자 ──
@@ -648,6 +682,98 @@ function renderInvest() {
   bindFields([["t_stock","targetStocks",1],["t_bond","targetBonds",1],["t_cash","targetCash",1]]);
 }
 
+// ── Bills checklist ──
+function renderBills() {
+  const bills = loadBills();
+  const now = new Date();
+  const monthKey = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}`;
+  const monthLabel = `${now.getFullYear()}년 ${now.getMonth()+1}월`;
+  const paid = loadBillCheck(monthKey);
+  const CATS = ["주거","유틸리티","보험","통신","구독","교육","차량","기타"];
+
+  const totalAmt = bills.reduce((s,b) => s + (b.amount||0), 0);
+  const paidAmt  = bills.filter(b => paid.has(b.id)).reduce((s,b) => s + (b.amount||0), 0);
+  const paidCnt  = bills.filter(b => paid.has(b.id)).length;
+  const unpaidAmt = totalAmt - paidAmt;
+
+  document.getElementById("billSection").innerHTML = `
+    <div class="card">
+      <div class="card-head">
+        <p class="card-label" style="margin:0">월 고정 지출 체크리스트 — ${monthLabel}</p>
+        <button id="btnAddBill" class="btn-outline">+ 항목 추가</button>
+      </div>
+      <div class="bill-summary">
+        <span>완료 <strong>${paidCnt}/${bills.length}</strong>건</span>
+        <span>납부 완료 <strong style="color:var(--green)">${money(paidAmt)}</strong></span>
+        <span>미납 <strong style="color:${unpaidAmt>0?"var(--red)":"var(--muted)"}">${money(unpaidAmt)}</strong></span>
+        <span style="margin-left:auto">월 합계 <strong>${money(totalAmt)}</strong></span>
+      </div>
+      <div class="bill-list">
+        ${bills.map(b => {
+          const isPaid = paid.has(b.id);
+          return `<div class="bill-item${isPaid?' bill-paid':''}">
+            <input type="checkbox" class="bill-cb" data-bid="${b.id}" ${isPaid?'checked':''} />
+            <input class="bill-name-inp" data-bid="${b.id}" value="${b.name}" placeholder="항목명" />
+            <select class="bill-cat-inp" data-bid="${b.id}">
+              ${CATS.map(c=>`<option${b.category===c?' selected':''}>${c}</option>`).join('')}
+            </select>
+            <span style="font-size:12px;color:var(--muted);white-space:nowrap">
+              <input class="bill-due-inp" data-bid="${b.id}" type="number" min="1" max="31" value="${b.dueDay}" />일
+            </span>
+            <input class="bill-amt-inp" data-bid="${b.id}" type="number" step="10" value="${b.amount}" placeholder="0" />
+            <button onclick="delBill(${b.id})" class="bill-del-btn">×</button>
+          </div>`;
+        }).join('')}
+      </div>
+    </div>`;
+
+  document.querySelectorAll('.bill-cb').forEach(cb => {
+    cb.addEventListener('change', () => {
+      const id = Number(cb.dataset.bid);
+      const p = loadBillCheck(monthKey);
+      if (cb.checked) p.add(id); else p.delete(id);
+      saveBillCheck(monthKey, p);
+      renderBills();
+    });
+  });
+  document.querySelectorAll('.bill-name-inp').forEach(inp => {
+    inp.addEventListener('change', () => {
+      const arr = loadBills(), b = arr.find(x => x.id === Number(inp.dataset.bid));
+      if (b) { b.name = inp.value; saveBills(arr); }
+    });
+  });
+  document.querySelectorAll('.bill-cat-inp').forEach(sel => {
+    sel.addEventListener('change', () => {
+      const arr = loadBills(), b = arr.find(x => x.id === Number(sel.dataset.bid));
+      if (b) { b.category = sel.value; saveBills(arr); }
+    });
+  });
+  document.querySelectorAll('.bill-due-inp').forEach(inp => {
+    inp.addEventListener('change', () => {
+      const arr = loadBills(), b = arr.find(x => x.id === Number(inp.dataset.bid));
+      if (b) { b.dueDay = Math.min(31, Math.max(1, Number(inp.value)||1)); saveBills(arr); }
+    });
+  });
+  document.querySelectorAll('.bill-amt-inp').forEach(inp => {
+    inp.addEventListener('change', () => {
+      const arr = loadBills(), b = arr.find(x => x.id === Number(inp.dataset.bid));
+      if (b) { b.amount = Number(inp.value)||0; saveBills(arr); renderBills(); }
+    });
+  });
+  document.getElementById('btnAddBill').addEventListener('click', () => {
+    const arr = loadBills();
+    arr.push({ id: Date.now(), name: "새 항목", amount: 0, dueDay: 1, category: "기타" });
+    saveBills(arr);
+    renderBills();
+  });
+}
+
+window.delBill = function(id) {
+  if (!confirm("이 항목을 삭제할까요?")) return;
+  saveBills(loadBills().filter(b => b.id !== id));
+  renderBills();
+};
+
 window.delStock = function(id) {
   if (!confirm("이 종목을 삭제할까요?")) return;
   const arr = loadStocks().filter(s => s.id !== id);
@@ -690,7 +816,7 @@ function renderGoals() {
   const coOk = totalGap < 5000;
   document.getElementById("collegeResult").innerHTML =
     collegeRows.map(r => `<div class="gr-row"><span>${r.y}학년 예상 비용</span><strong>${money(r.cost)}</strong></div>`).join("") +
-    `<div class="gr-row"><span>4년 총 예상 부족분</span><strong style="color:${coOk?"var(--green)":"var(--amber)"}">${money(totalGap)}</strong></div>
+    `<div class="gr-row"><span>4년 총 예상 부족분</span><strong style="color:${coOk?"var(--green)":"var(--amber)"}">$${money(totalGap)}</strong></div>
     <div class="gr-verdict" style="background:${coOk?"#eaf8f2":"#fff8ec"};color:${coOk?"#147852":"#9a6500"}">
       ${coOk ? "✅ 현재 계획으로 등록금 커버 가능" : `⚠️ 부족분 ${money(totalGap)} — 저축 또는 대출 증액 필요`}
     </div>`;
@@ -717,8 +843,8 @@ function renderGoals() {
     <div class="gr-row"><span>월 모기지 (원리금)</span><strong>${money(mtg.pi)}</strong></div>
     <div class="gr-row"><span>재산세 + 보험 + HOA</span><strong>${money(mtg.tax+mtg.ins+mtg.hoa)}</strong></div>
     <div class="gr-row"><span>월 총 주거비</span><strong style="font-size:16px">${money(mtg.total)}</strong></div>
-    <div class="gr-row"><span>DTI (소득 대비 주거비)</span><strong style="color:${dti>36?"var(--red)":"var(--green)"}">${pct(dti)}</strong></div>
-    <div class="gr-row"><span>다운 후 잔여 현금</span><strong style="color:${cashAfter<S.expenses*6?"var(--amber)":"var(--green)"}">${money(cashAfter)}</strong></div>
+    <div class="gr-row"><span>DTI (소득 대비 주거비)</span><strong style="color:${dti>36?"var(--red)":"var(--green)"}">$${pct(dti)}</strong></div>
+    <div class="gr-row"><span>다운 후 잔여 현금</span><strong style="color:${cashAfter<S.expenses*6?"var(--amber)":"var(--green)"}">$${money(cashAfter)}</strong></div>
     <div class="gr-verdict" style="background:${houseOk?"#eaf8f2":"#fff8ec"};color:${houseOk?"#147852":"#9a6500"}">
       ${houseOk ? "✅ 현재 조건으로 구매 가능" : "⚠️ " + (dti>36?"DTI "+pct(dti)+" 높음":cashAfter<S.expenses*6?"다운 후 비상금 부족":"월 현금흐름 마이너스")}
     </div>`;
