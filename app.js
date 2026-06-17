@@ -1,3 +1,6 @@
+// ── Version ──
+const APP_VERSION = "1.2.0";
+
 // ── Storage keys ──
 const SK_STATE    = "tf-state-v2";
 const SK_STOCKS   = "tf-stocks-v2";
@@ -922,6 +925,8 @@ document.addEventListener("DOMContentLoaded", () => {
     pad.appendChild(btn);
   });
   initPin();
+
+  document.getElementById("appVersion").textContent = "v" + APP_VERSION;
 
   buildNav();
   setPage("assets");
