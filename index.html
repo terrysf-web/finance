@@ -88,19 +88,14 @@
       <!-- Summary row -->
       <div id="investSummary" class="stat-cards"></div>
 
-      <div class="two-col" style="margin-top:18px">
-        <!-- 401k -->
-        <div class="card">
-          <p class="card-label">401k</p>
-          <div id="k401Inputs" class="field-list"></div>
-          <div id="k401Funds" style="margin-top:16px"></div>
-        </div>
-        <!-- IRA -->
-        <div class="card">
-          <p class="card-label" id="iraLabel">IRA</p>
-          <div id="iraInputs" class="field-list"></div>
-          <div id="iraFunds" style="margin-top:16px"></div>
-        </div>
+      <!-- 401k accounts (dynamically rendered) -->
+      <div id="k401Section" style="margin-top:18px"></div>
+
+      <!-- IRA -->
+      <div class="card" style="margin-top:18px">
+        <p class="card-label" id="iraLabel">IRA</p>
+        <div id="iraInputs" class="field-list"></div>
+        <div id="iraFunds" style="margin-top:16px"></div>
       </div>
 
       <!-- Stocks -->

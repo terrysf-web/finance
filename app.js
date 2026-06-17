@@ -17,15 +17,22 @@ const DEFAULT = {
   expenses:    9350,
   k401Contrib: 2550,
   collegeSave: 1250,
-  k401MatchPct:    4,
-  k401MyPct:       8,
   iraType:     "Roth",
   iraContrib:  7500,
-  k401Funds: [
-    { name: "Large Cap Index (VIIIX)", pct: 55, type: "stock" },
-    { name: "Bond Index (VBTIX)",      pct: 25, type: "bond"  },
-    { name: "Intl Index (VTPSX)",      pct: 15, type: "stock" },
-    { name: "Money Market",            pct:  5, type: "cash"  }
+  k401Accounts: [
+    {
+      id: 1,
+      name: "Current Employer (Fidelity)",
+      balance: 620000,
+      myPct: 8,
+      matchPct: 4,
+      funds: [
+        { name: "Large Cap Index (VIIIX)", pct: 55, type: "stock" },
+        { name: "Bond Index (VBTIX)",      pct: 25, type: "bond"  },
+        { name: "Intl Index (VTPSX)",      pct: 15, type: "stock" },
+        { name: "Money Market",            pct:  5, type: "cash"  }
+      ]
+    }
   ],
   iraFunds: [
     { name: "S&P 500 (FXAIX)",     pct: 70, type: "stock" },
@@ -66,8 +73,22 @@ const DEFAULT_STOCKS = [
 
 // ── Load / save ──
 function loadState() {
-  try { return { ...DEFAULT, ...JSON.parse(localStorage.getItem(SK_STATE)) }; }
-  catch { return { ...DEFAULT }; }
+  try {
+    const saved = JSON.parse(localStorage.getItem(SK_STATE));
+    const state = { ...DEFAULT, ...saved };
+    // Migrate old single-k401 format
+    if (!state.k401Accounts && state.k401 !== undefined) {
+      state.k401Accounts = [{
+        id: 1, name: "401k 어카운트",
+        balance: state.k401 || 0,
+        myPct: state.k401MyPct || 8,
+        matchPct: state.k401MatchPct || 4,
+        funds: state.k401Funds || DEFAULT.k401Accounts[0].funds
+      }];
+    }
+    if (!state.k401Accounts) state.k401Accounts = DEFAULT.k401Accounts.map(a=>({...a, funds:[...a.funds]}));
+    return state;
+  } catch { return { ...DEFAULT }; }
 }
 function saveState() {
   localStorage.setItem(SK_STATE, JSON.stringify(S));
@@ -207,9 +228,11 @@ function setPage(id) {
 function calcStockTotal(stocks) {
   return stocks.reduce((s, x) => s + x.shares * x.currentPrice, 0);
 }
+function k401Total() {
+  return (S.k401Accounts || []).reduce((s, a) => s + (a.balance || 0), 0);
+}
 function calcNetWorth(stocks) {
-  const tv = calcStockTotal(stocks);
-  return S.cash + tv + S.k401 + S.ira + S.homeEquity - S.debts;
+  return S.cash + calcStockTotal(stocks) + k401Total() + S.ira + S.homeEquity - S.debts;
 }
 function calcMortgage() {
   const loan = Math.max(S.housePrice - S.houseDown, 0);
@@ -224,9 +247,16 @@ function calcCashFlow() {
 }
 function calcAllocation(stocks) {
   const stockVal = calcStockTotal(stocks);
-  const k401Stocks = S.k401Funds.filter(f => f.type === "stock").reduce((s,f) => s + S.k401 * f.pct/100, 0);
-  const k401Bonds  = S.k401Funds.filter(f => f.type === "bond" ).reduce((s,f) => s + S.k401 * f.pct/100, 0);
-  const k401Cash   = S.k401Funds.filter(f => f.type === "cash" ).reduce((s,f) => s + S.k401 * f.pct/100, 0);
+  let k401Stocks = 0, k401Bonds = 0, k401Cash = 0;
+  (S.k401Accounts || []).forEach(acct => {
+    if (acct.funds && acct.funds.length) {
+      k401Stocks += acct.funds.filter(f=>f.type==="stock").reduce((s,f)=>s+acct.balance*f.pct/100, 0);
+      k401Bonds  += acct.funds.filter(f=>f.type==="bond" ).reduce((s,f)=>s+acct.balance*f.pct/100, 0);
+      k401Cash   += acct.funds.filter(f=>f.type==="cash" ).reduce((s,f)=>s+acct.balance*f.pct/100, 0);
+    } else {
+      k401Stocks += acct.balance; // no funds defined, assume all equity
+    }
+  });
   const iraStocks  = S.iraFunds.filter(f => f.type === "stock").reduce((s,f) => s + S.ira * f.pct/100, 0);
   const iraBonds   = S.iraFunds.filter(f => f.type === "bond" ).reduce((s,f) => s + S.ira * f.pct/100, 0);
   const totalStocks = k401Stocks + iraStocks + stockVal;
@@ -365,12 +395,12 @@ function renderAssets() {
     <div>
       <p style="margin:0 0 6px;font-size:12px;font-weight:800;text-transform:uppercase;letter-spacing:.06em;color:rgba(255,255,255,.5)">총 순자산</p>
       <div class="hero-nw">${money(nw, true)}</div>
-      <p style="margin:8px 0 0;font-size:13px;color:rgba(255,255,255,.5)">자산 합계 ${money(S.cash+tv+S.k401+S.ira+S.homeEquity, true)} — 부채 ${money(S.debts, true)}</p>
+      <p style="margin:8px 0 0;font-size:13px;color:rgba(255,255,255,.5)">자산 합계 ${money(S.cash+tv+k401Total()+S.ira+S.homeEquity, true)} — 부채 ${money(S.debts, true)}</p>
     </div>
     <div class="hero-stats">
       <div class="hero-stat"><span>현금</span><strong>${money(S.cash, true)}</strong></div>
       <div class="hero-stat"><span>투자/주식</span><strong>${money(tv, true)}</strong></div>
-      <div class="hero-stat"><span>401k + IRA</span><strong>${money(S.k401+S.ira, true)}</strong></div>
+      <div class="hero-stat"><span>401k + IRA</span><strong>${money(k401Total()+S.ira, true)}</strong></div>
       <div class="hero-stat"><span>부동산</span><strong>${money(S.homeEquity, true)}</strong></div>
     </div>`;
 
@@ -378,7 +408,7 @@ function renderAssets() {
   const accts = [
     { label: "현금 / 예금", key: "cash",      sub: `비상금 ${(S.cash/S.expenses).toFixed(1)}개월분`, color: "#19a974" },
     { label: "주식 계좌",   key: null,         val: tv, sub: `${stocks.length}개 종목`, color: "#276ef1" },
-    { label: "401k",        key: "k401",       sub: `은퇴 계좌 (세전)`, color: "#7c5cff" },
+    { label: "401k", key: null, val: k401Total(), sub: `${(S.k401Accounts||[]).length}개 어카운트 · 세전`, color: "#7c5cff" },
     { label: "IRA",         key: "ira",        sub: `${S.iraType} IRA`, color: "#14b8c4" },
     { label: "부동산 (Equity)", key: "homeEquity", sub: "현재 홈에퀴티", color: "#d99000" },
     { label: "부채 (모기지 제외)", key: "debts", sub: "카드·대출 등", color: "#d94b4b" }
@@ -439,13 +469,16 @@ function renderInvest() {
   const glTotal = tv - costTotal;
   const alloc = calcAllocation(stocks);
   const annualSalary = S.income * 12;
-  const myContrib = annualSalary * S.k401MyPct / 100;
-  const empMatch  = annualSalary * Math.min(S.k401MyPct, S.k401MatchPct) / 100;
+
+  const k401Tot = k401Total();
+  const activeAccts = (S.k401Accounts||[]).filter(a => a.myPct > 0);
+  const totalMyContrib = activeAccts.reduce((s,a) => s + annualSalary * a.myPct/100, 0);
+  const totalEmpMatch  = activeAccts.reduce((s,a) => s + annualSalary * Math.min(a.myPct, a.matchPct)/100, 0);
 
   // Summary stats
   document.getElementById("investSummary").innerHTML = [
-    { label:"총 투자자산", val: money(S.k401+S.ira+tv, true), sub:"401k+IRA+주식" },
-    { label:"401k",        val: money(S.k401, true), sub:`내 기여 ${pct(S.k401MyPct)} + 매칭 ${pct(S.k401MatchPct)}` },
+    { label:"총 투자자산", val: money(k401Tot+S.ira+tv, true), sub:"401k+IRA+주식" },
+    { label:"401k 합계",   val: money(k401Tot, true), sub:`${(S.k401Accounts||[]).length}개 어카운트 · 매칭포함 ${money(totalMyContrib+totalEmpMatch,true)}/yr` },
     { label:"IRA ("+S.iraType+")", val: money(S.ira, true), sub:`한도 ${money(S.iraContrib)}/yr` },
     { label:"주식 총 손익", val: (glTotal>=0?"+":"")+money(glTotal,true),
       sub: costTotal>0 ? pct(glTotal/costTotal*100)+" 수익률" : "—",
@@ -456,20 +489,64 @@ function renderInvest() {
     <div class="sc-sub">${c.sub}</div>
   </div>`).join("");
 
-  // 401k inputs
-  document.getElementById("k401Inputs").innerHTML = [
-    field("현재 잔고 ($)", "k_bal", S.k401, 1000),
-    field("내 기여율 (%)", "k_my", S.k401MyPct, 0.5),
-    field("고용주 매칭 (%)", "k_match", S.k401MatchPct, 0.5)
-  ].join("");
-  bindFields([["k_bal","k401",1000],["k_my","k401MyPct",.5],["k_match","k401MatchPct",.5]]);
-  document.getElementById("k401Funds").innerHTML = `
-    <p style="font-size:12px;font-weight:800;color:var(--muted);text-transform:uppercase;margin:0 0 10px">펀드 배분</p>
-    ${S.k401Funds.map(f => `<div class="fund-bar">
-      <div class="fund-bar-label"><span>${f.name}</span><strong>${f.pct}%</strong></div>
-      <div class="fund-track"><div class="fund-fill" style="width:${f.pct}%;background:${f.type==="stock"?"#276ef1":f.type==="bond"?"#14b8c4":"#19a974"}"></div></div>
-    </div>`).join("")}
-    <p style="margin:12px 0 0;font-size:12px;color:var(--muted)">연간 내 기여: <strong style="color:var(--ink)">${money(myContrib)}</strong> · 고용주 매칭: <strong style="color:var(--green)">${money(empMatch)}</strong></p>`;
+  // 401k accounts
+  const fundColors = { stock:"#276ef1", bond:"#14b8c4", cash:"#19a974" };
+  document.getElementById("k401Section").innerHTML =
+    `<div style="display:flex;align-items:center;gap:12px;margin-bottom:12px">
+       <p class="card-label" style="margin:0;flex:1">401k 어카운트</p>
+       <button id="btnAdd401k" class="btn-outline">+ 어카운트 추가</button>
+     </div>` +
+    `<div class="k401-grid">` +
+    (S.k401Accounts||[]).map((acct, idx) => {
+      const myC = annualSalary * acct.myPct / 100;
+      const emC = annualSalary * Math.min(acct.myPct, acct.matchPct) / 100;
+      return `<div class="card k401-card">
+        <div class="card-head">
+          <input class="k4-name" data-idx="${idx}" value="${acct.name}"
+            style="font-weight:700;border:0;border-bottom:1px dashed var(--line);background:transparent;color:var(--ink);font-size:14px;flex:1;min-width:0;padding:2px 4px" />
+          <button onclick="del401k(${acct.id})" style="border:0;background:none;cursor:pointer;color:var(--muted);font-size:20px;padding:0 4px" title="삭제">×</button>
+        </div>
+        <div class="field-list" style="margin-top:12px">
+          <div class="field"><label>현재 잔고 ($)</label>
+            <input class="k4-bal" data-idx="${idx}" type="number" step="1000" value="${acct.balance}" /></div>
+          <div class="field"><label>내 기여율 (%)</label>
+            <input class="k4-mypct" data-idx="${idx}" type="number" step="0.5" value="${acct.myPct}" /></div>
+          <div class="field"><label>고용주 매칭 (%)</label>
+            <input class="k4-match" data-idx="${idx}" type="number" step="0.5" value="${acct.matchPct}" /></div>
+        </div>
+        ${acct.funds && acct.funds.length ? `
+        <div style="margin-top:14px">
+          <p style="font-size:11px;font-weight:800;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;margin:0 0 8px">펀드 배분</p>
+          ${acct.funds.map(f=>`<div class="fund-bar">
+            <div class="fund-bar-label"><span>${f.name}</span><strong>${f.pct}%</strong></div>
+            <div class="fund-track"><div class="fund-fill" style="width:${f.pct}%;background:${fundColors[f.type]||"#687385"}"></div></div>
+          </div>`).join("")}
+        </div>` : ""}
+        <p style="margin:12px 0 0;font-size:12px;color:var(--muted)">
+          연간 내 기여: <strong style="color:var(--ink)">${money(myC)}</strong>
+          ${acct.matchPct > 0 ? ` · 고용주 매칭: <strong style="color:var(--green)">${money(emC)}</strong>` : ""}
+        </p>
+      </div>`;
+    }).join("") +
+    `</div>`;
+
+  // Bind 401k account inputs
+  document.querySelectorAll(".k4-name").forEach(el => {
+    el.addEventListener("change", () => { S.k401Accounts[Number(el.dataset.idx)].name = el.value; markDirty(); });
+  });
+  document.querySelectorAll(".k4-bal").forEach(el => {
+    el.addEventListener("change", () => { S.k401Accounts[Number(el.dataset.idx)].balance = Number(el.value)||0; markDirty(); render(); });
+  });
+  document.querySelectorAll(".k4-mypct").forEach(el => {
+    el.addEventListener("change", () => { S.k401Accounts[Number(el.dataset.idx)].myPct = Number(el.value)||0; markDirty(); render(); });
+  });
+  document.querySelectorAll(".k4-match").forEach(el => {
+    el.addEventListener("change", () => { S.k401Accounts[Number(el.dataset.idx)].matchPct = Number(el.value)||0; markDirty(); render(); });
+  });
+  document.getElementById("btnAdd401k").addEventListener("click", () => {
+    S.k401Accounts.push({ id: Date.now(), name: "이전 직장 401k", balance: 0, myPct: 0, matchPct: 0, funds: [] });
+    markDirty(); render();
+  });
 
   // IRA inputs
   document.getElementById("iraLabel").textContent = S.iraType + " IRA";
@@ -575,6 +652,13 @@ window.delStock = function(id) {
   markDirty(); render();
 };
 
+window.del401k = function(id) {
+  if ((S.k401Accounts||[]).length <= 1) { alert("최소 1개의 401k 어카운트가 필요합니다."); return; }
+  if (!confirm("이 401k 어카운트를 삭제할까요?")) return;
+  S.k401Accounts = S.k401Accounts.filter(a => a.id !== id);
+  markDirty(); render();
+};
+
 // ── Page: 목표 ──
 function renderGoals() {
   // College
@@ -649,7 +733,7 @@ function renderGoals() {
   ]);
   const yrs = Math.max(S.retireAge - S.currentAge, 0);
   const annualContrib = S.k401Contrib * 12;
-  let bal = S.k401 + S.ira;
+  let bal = k401Total() + S.ira;
   for (let i = 0; i < yrs; i++) bal = bal * (1 + S.retireReturn/100) + annualContrib;
   const annual = bal * S.retireWithdraw / 100;
   const monthly = annual / 12;
@@ -667,7 +751,7 @@ function renderGoals() {
   // Timeline chart
   const totalYrs = Math.max(yrs + 3, 20);
   const labels = [], cashVals = [], retVals = [];
-  let cash = S.cash, retBal = S.k401 + S.ira;
+  let cash = S.cash, retBal = k401Total() + S.ira;
   const cf2 = calcCashFlow();
   for (let i = 0; i <= totalYrs; i += 2) {
     labels.push(`${S.currentAge+i}세`);
@@ -731,7 +815,7 @@ function buildContext() {
 ## 자산 현황 (총 순자산: ${money(nw, true)})
 - 현금: ${money(S.cash, true)}
 - 주식 계좌: ${money(tv, true)} (${stocks.length}종목: ${stocks.map(s=>`${s.ticker} ${s.shares}주 @$${s.currentPrice}`).join(", ")})
-- 401k: ${money(S.k401, true)} | 내기여 ${pct(S.k401MyPct)}, 고용주매칭 ${pct(S.k401MatchPct)}
+- 401k (${(S.k401Accounts||[]).length}개 어카운트, 합계 ${money(k401Total(),true)}): ${(S.k401Accounts||[]).map(a=>`${a.name} ${money(a.balance,true)}${a.myPct?` (기여 ${pct(a.myPct)}/매칭 ${pct(a.matchPct)})`:""}`.trim()).join(", ")}
 - ${S.iraType} IRA: ${money(S.ira, true)}
 - 부동산 에퀴티: ${money(S.homeEquity, true)}
 - 부채: ${money(S.debts, true)}
