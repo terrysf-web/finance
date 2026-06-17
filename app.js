@@ -219,6 +219,7 @@ const pages = [
   ["retirement", "RT", "Retirement Simulator"],
   ["goals", "GL", "Goals"],
   ["reports", "RP", "Reports"],
+  ["ai", "🤖", "AI 어드바이저"],
   ["profile", "⚙", "Family Profile"]
 ];
 
@@ -954,6 +955,7 @@ function setPage(id) {
   document.getElementById("mobileNav").value = id;
   document.getElementById("pageTitle").textContent = document.getElementById(`page-${id}`).dataset.pageTitle;
   renderAll();
+  if (id === "ai") initAiPage();
 }
 
 function renderForms() {
@@ -1611,6 +1613,274 @@ document.getElementById("saveReminderButton").addEventListener("click", () => {
   document.getElementById("newReminderNote").value = "";
   renderReminders();
 });
+
+// ── AI Chat Advisor ──────────────────────────────────────────────
+const AI_KEY_STORAGE = "terry-finance-ai-key";
+let aiMessages = []; // {role, content}
+
+function getAiKey() {
+  return localStorage.getItem(AI_KEY_STORAGE) || "";
+}
+
+function buildFinancialContext() {
+  const h = state.household;
+  const c = state.college;
+  const house = state.house;
+  const r = state.retirement;
+  const p = state.profile;
+  const calc = getCalculations();
+  const retCalc = getRetirementCalculations();
+  const taxCalc = getTaxCalculations();
+
+  return `당신은 Terry 가족의 전담 재무 어드바이저입니다. 아래는 현재 Terry 가족의 실제 재무 데이터입니다. 이 데이터를 기반으로 한국어로 친절하고 구체적인 재무 조언을 해주세요.
+
+## Terry 가족 프로필
+- 부모 이름: ${p.parentName}, 나이: ${p.parentAge}세
+- 자녀: ${p.studentName}, 대학: ${p.school}
+- 목표 은퇴 나이: ${p.retirementTargetAge}세 (${p.retirementTargetAge - p.parentAge}년 후)
+
+## 현재 자산 현황
+- 현금/예금: ${money(h.cash)}
+- 투자 계좌 (주식 등): ${money(h.investments)}
+- 은퇴 계좌 (401k 등): ${money(h.retirement)}
+- 현재 주택 자산 (equity): ${money(h.homeEquity)}
+- 부채 (모기지 제외): ${money(h.debts)}
+- **순자산: ${money(calc.netWorth)}**
+
+## 월 소득 및 지출
+- 월 소득: ${money(h.monthlyIncome)}
+- 월 지출: ${money(h.monthlyExpenses)}
+- 월 은퇴 기여금: ${money(h.retirementContribution)}
+- 월 대학 저축: ${money(h.collegeMonthlySavings)}
+- **월 잉여 현금: ${money(calc.monthlyCashFlow)}**
+- 비상금 보유 기간: ${calc.emergencyMonths.toFixed(1)}개월
+
+## 대학 등록금 계획 (${p.school})
+- 현재 연간 등록금: ${money(c.annualCost)}
+- ${p.studentStartYear}년 후 시작 예정
+- 대학 저축 잔고: ${money(c.collegeFund)}
+- 연간 가족 지원 목표: ${money(c.annualFamilySupport)}
+- 연간 학자금 대출: ${money(c.studentLoan)}
+- **예상 4년 총 부족분: ${money(calc.collegeGap)}**
+
+## 주택 구매 계획
+- 목표 주택 가격: ${money(house.housePrice)}
+- 다운페이먼트: ${money(house.downPayment)}
+- 이자율: ${house.interestRate}%
+- 대출 기간: ${house.loanYears}년
+- ${house.purchaseDelayYears}년 후 구매 예정
+- **월 모기지 총액 (PITI+HOA): ${money(calc.mortgage.total)}**
+- **DTI (부채 대비 소득 비율): ${calc.dti.toFixed(1)}%**
+
+## 은퇴 계획
+- 현재 은퇴 계좌 잔고: ${money(h.retirement)}
+- 예상 연 수익률: ${r.annualReturn}%
+- **은퇴 시 예상 잔고: ${money(retCalc.projectedBalance)}**
+- **은퇴 후 월 인출 가능액: ${money(retCalc.monthlyWithdrawal)}**
+- **예상 커버 기간: ${retCalc.coverageYears >= 99 ? "30년 이상" : retCalc.coverageYears + "년"}**
+
+## 세금 현황
+- 연 소득: ${money(taxCalc.grossIncome)}
+- 예상 연방세: ${money(taxCalc.totalFederal)}
+- 실효세율: ${taxCalc.effectiveRate.toFixed(1)}%
+- 한계세율: ${taxCalc.marginalRate}%
+
+## 현재 재무 건강도
+- 종합 점수: ${calc.score}/100
+- 비상금: ${calc.emergencyMonths < 6 ? "⚠️ 부족 (" + calc.emergencyMonths.toFixed(1) + "개월)" : "✅ 양호 (" + calc.emergencyMonths.toFixed(1) + "개월)"}
+- DTI: ${calc.dti > 36 ? "⚠️ 주의 (" + calc.dti.toFixed(1) + "%)" : "✅ 양호 (" + calc.dti.toFixed(1) + "%)"}
+- 월 현금흐름: ${calc.monthlyCashFlow < 0 ? "❌ 마이너스" : "✅ " + money(calc.monthlyCashFlow)}
+
+위 데이터를 바탕으로 사용자 질문에 답변해주세요. 숫자를 인용할 때는 구체적인 금액을 언급하고, 실행 가능한 조언을 제공하세요.`;
+}
+
+async function sendAiMessage() {
+  const input = document.getElementById("aiInput");
+  const userText = input.value.trim();
+  if (!userText) return;
+
+  const apiKey = getAiKey();
+  if (!apiKey) {
+    alert("API 키를 먼저 입력해주세요.");
+    return;
+  }
+
+  input.value = "";
+  input.disabled = true;
+  document.getElementById("aiSend").disabled = true;
+
+  // Hide welcome screen
+  const welcome = document.getElementById("aiWelcome");
+  if (welcome) welcome.style.display = "none";
+
+  // Add user message
+  aiMessages.push({ role: "user", content: userText });
+  renderAiMessages(true);
+
+  // Add loading indicator
+  const messagesEl = document.getElementById("aiMessages");
+  const loadingId = "ai-loading-" + Date.now();
+  const loadingDiv = document.createElement("div");
+  loadingDiv.id = loadingId;
+  loadingDiv.style.cssText = "display:flex;align-items:center;gap:10px;padding:12px 16px;background:white;border-radius:12px;border:1px solid var(--line);max-width:80%;align-self:flex-start";
+  loadingDiv.innerHTML = `<div style="width:8px;height:8px;border-radius:50%;background:var(--blue);animation:pulse 1s infinite"></div><span style="color:var(--muted);font-size:14px">AI가 분석 중...</span>`;
+  messagesEl.appendChild(loadingDiv);
+  messagesEl.scrollTop = messagesEl.scrollHeight;
+
+  try {
+    const systemPrompt = buildFinancialContext();
+    const response = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-api-key": apiKey,
+        "anthropic-version": "2023-06-01",
+        "anthropic-dangerous-direct-browser-access": "true"
+      },
+      body: JSON.stringify({
+        model: "claude-haiku-4-5-20251001",
+        max_tokens: 1024,
+        system: systemPrompt,
+        messages: aiMessages
+      })
+    });
+
+    if (!response.ok) {
+      const err = await response.json().catch(() => ({}));
+      throw new Error(err.error?.message || `API 오류 (${response.status})`);
+    }
+
+    const data = await response.json();
+    const assistantText = data.content?.[0]?.text || "(응답 없음)";
+    aiMessages.push({ role: "assistant", content: assistantText });
+
+    loadingDiv.remove();
+    renderAiMessages(false);
+  } catch (err) {
+    loadingDiv.remove();
+    const errDiv = document.createElement("div");
+    errDiv.style.cssText = "padding:12px 16px;background:#fff2f2;border-radius:12px;border:1px solid #fca5a5;color:#b91c1c;font-size:14px;max-width:80%;align-self:flex-start";
+    errDiv.textContent = `오류: ${err.message}`;
+    messagesEl.appendChild(errDiv);
+    messagesEl.scrollTop = messagesEl.scrollHeight;
+    // Remove failed user message from history
+    aiMessages.pop();
+  } finally {
+    input.disabled = false;
+    document.getElementById("aiSend").disabled = false;
+    input.focus();
+  }
+}
+
+function renderAiMessages(scrollToBottom) {
+  const container = document.getElementById("aiMessages");
+  const welcome = document.getElementById("aiWelcome");
+
+  // Clear existing messages (keep welcome div)
+  Array.from(container.children).forEach(child => {
+    if (child.id !== "aiWelcome") child.remove();
+  });
+
+  aiMessages.forEach(msg => {
+    const isUser = msg.role === "user";
+    const div = document.createElement("div");
+    div.style.cssText = `
+      padding:12px 16px;border-radius:12px;font-size:14px;line-height:1.6;
+      max-width:85%;word-break:break-word;white-space:pre-wrap;
+      ${isUser
+        ? "background:var(--blue);color:white;align-self:flex-end;border-bottom-right-radius:4px"
+        : "background:white;color:var(--ink);align-self:flex-start;border:1px solid var(--line);border-bottom-left-radius:4px"}
+    `;
+    div.textContent = msg.content;
+    container.appendChild(div);
+  });
+
+  if (scrollToBottom) {
+    container.scrollTop = container.scrollHeight;
+  }
+}
+
+function initAiPage() {
+  const key = getAiKey();
+  const pill = document.getElementById("aiStatusPill");
+  const keyMask = document.getElementById("aiKeyMask");
+  const input = document.getElementById("aiInput");
+  const sendBtn = document.getElementById("aiSend");
+
+  if (key) {
+    pill.textContent = "연결됨 ✓";
+    pill.style.background = "var(--green)";
+    pill.style.color = "white";
+    keyMask.textContent = key.slice(0, 10) + "..." + key.slice(-4);
+    input.disabled = false;
+    sendBtn.disabled = false;
+  } else {
+    pill.textContent = "미연결";
+    pill.style.background = "";
+    pill.style.color = "";
+    keyMask.textContent = "—";
+    input.disabled = true;
+    sendBtn.disabled = true;
+  }
+
+  // Suggested questions
+  const suggestions = [
+    "아들 등록금과 집 구매를 어떻게 우선순위를 정해야 할까요?",
+    "은퇴까지 얼마나 더 저축해야 할까요?",
+    "지금 주식을 팔아서 등록금을 낼까요, 401k를 써야 할까요?",
+    "비상금이 충분한가요?",
+    "집 구매 타이밍이 언제가 좋을까요?"
+  ];
+  const sugEl = document.getElementById("aiSuggestions");
+  if (sugEl) {
+    sugEl.innerHTML = suggestions.map(s => `
+      <button onclick="document.getElementById('aiInput').value=${JSON.stringify(s)};document.getElementById('aiInput').focus()" style="
+        padding:8px 14px;border-radius:20px;border:1.5px solid var(--line);
+        background:white;font-size:12px;cursor:pointer;color:var(--ink);
+        transition:border-color 0.2s
+      " onmouseover="this.style.borderColor='var(--blue)'" onmouseout="this.style.borderColor='var(--line)'">${s}</button>
+    `).join("");
+  }
+}
+
+document.getElementById("aiSaveKey").addEventListener("click", () => {
+  const val = document.getElementById("aiApiKey").value.trim();
+  if (!val.startsWith("sk-ant-")) {
+    alert("올바른 Anthropic API 키를 입력해주세요. (sk-ant-로 시작)");
+    return;
+  }
+  localStorage.setItem(AI_KEY_STORAGE, val);
+  document.getElementById("aiApiKey").value = "";
+  initAiPage();
+});
+
+document.getElementById("aiClearKey").addEventListener("click", () => {
+  if (confirm("API 키를 삭제할까요?")) {
+    localStorage.removeItem(AI_KEY_STORAGE);
+    initAiPage();
+  }
+});
+
+document.getElementById("aiClearChat").addEventListener("click", () => {
+  aiMessages = [];
+  renderAiMessages(false);
+  const welcome = document.getElementById("aiWelcome");
+  if (welcome) welcome.style.display = "";
+  initAiPage();
+});
+
+document.getElementById("aiSend").addEventListener("click", sendAiMessage);
+document.getElementById("aiInput").addEventListener("keydown", e => {
+  if (e.key === "Enter" && !e.shiftKey) {
+    e.preventDefault();
+    sendAiMessage();
+  }
+});
+
+// Add pulse animation for loading
+const pulseStyle = document.createElement("style");
+pulseStyle.textContent = `@keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.3} }`;
+document.head.appendChild(pulseStyle);
 
 renderNav();
 setPage(currentPage);
