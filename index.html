@@ -1,571 +1,246 @@
 <!doctype html>
-<html lang="en">
-  <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Terry Family Finance Advisor</title>
-    <link rel="stylesheet" href="styles.css?v=ipad-landscape-v3" />
-    <link rel="manifest" href="manifest.json" />
-    <meta name="theme-color" content="#0c1830" />
-    <meta name="apple-mobile-web-app-capable" content="yes" />
-    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
-    <meta name="apple-mobile-web-app-title" content="Finance" />
-    <link rel="apple-touch-icon" href="icon-192.png" />
-  </head>
-  <body>
-    <!-- PIN Lock Screen -->
-    <div id="lockScreen" style="
-      display:none;position:fixed;inset:0;z-index:9999;
-      background:linear-gradient(180deg,#0c1830,#081121);
-      display:flex;flex-direction:column;align-items:center;justify-content:center;gap:24px;
-    ">
-      <div style="text-align:center;color:white">
-        <div style="
-          width:72px;height:72px;border-radius:20px;margin:0 auto 16px;
-          background:linear-gradient(145deg,#14b8c4,#276ef1);
-          display:grid;place-items:center;font-size:28px;font-weight:800;color:white
-        ">FL</div>
-        <h2 style="margin:0;font-size:24px">Terry Family Finance</h2>
-        <p style="margin:8px 0 0;color:rgba(255,255,255,0.6);font-size:14px" id="lockSubtitle">PIN을 입력하세요</p>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Terry Family Finance</title>
+  <link rel="stylesheet" href="styles.css" />
+  <link rel="manifest" href="manifest.json" />
+  <meta name="theme-color" content="#0c1830" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="Finance" />
+  <link rel="apple-touch-icon" href="icon-192.png" />
+</head>
+<body>
+
+<!-- PIN Lock -->
+<div id="lockScreen">
+  <div class="lock-logo">TF</div>
+  <h2>Terry Family Finance</h2>
+  <p id="lockSubtitle">PIN을 입력하세요</p>
+  <div id="pinDots">
+    <span class="dot"></span><span class="dot"></span>
+    <span class="dot"></span><span class="dot"></span>
+  </div>
+  <div id="pinPad"></div>
+  <p id="lockError"></p>
+  <p id="setupHint"></p>
+</div>
+
+<!-- App -->
+<div id="app">
+  <!-- Sidebar -->
+  <aside id="sidebar">
+    <div class="brand">
+      <div class="brand-mark">TF</div>
+      <div>
+        <strong>Terry Family</strong>
+        <span>Finance</span>
       </div>
-
-      <div style="display:flex;gap:14px;margin:8px 0" id="pinDots">
-        <div class="pin-dot"></div>
-        <div class="pin-dot"></div>
-        <div class="pin-dot"></div>
-        <div class="pin-dot"></div>
-      </div>
-
-      <div id="pinPad" style="display:grid;grid-template-columns:repeat(3,72px);gap:12px"></div>
-
-      <p id="lockError" style="color:#ff6b6b;font-size:13px;min-height:20px;margin:0"></p>
-
-      <p id="setupHint" style="color:rgba(255,255,255,0.4);font-size:12px;margin:0;text-align:center;max-width:260px"></p>
     </div>
+    <nav id="nav"></nav>
+    <div class="sidebar-footer">
+      <button id="btnSave" class="btn-primary">저장</button>
+      <button id="btnReset" class="btn-ghost">초기화</button>
+    </div>
+  </aside>
 
-    <style>
-      .pin-dot {
-        width: 14px; height: 14px;
-        border-radius: 50%;
-        border: 2px solid rgba(255,255,255,0.4);
-        background: transparent;
-        transition: background 0.2s;
-      }
-      .pin-dot.filled { background: white; border-color: white; }
-    </style>
+  <!-- Main -->
+  <main id="main">
+    <header id="topbar">
+      <div>
+        <p class="label" id="pageLabel">자산 현황</p>
+        <h1 id="pageTitle">내 자산</h1>
+      </div>
+      <div class="topbar-right">
+        <span id="saveStatus" class="save-badge saved">저장됨</span>
+        <select id="mobileNav"></select>
+      </div>
+    </header>
 
-    <div class="app-shell">
-      <aside class="sidebar" aria-label="Primary navigation">
-        <div class="brand">
-          <div class="brand-mark">FL</div>
-          <div>
-            <strong>Terry Family</strong>
-            <span>Finance Advisor</span>
+    <!-- Page: 자산 현황 -->
+    <section class="page active" id="page-assets" data-title="내 자산" data-label="자산 현황">
+
+      <!-- Net worth hero -->
+      <div id="networthHero" class="hero-card"></div>
+
+      <!-- Account cards -->
+      <div id="accountCards" class="account-grid"></div>
+
+      <!-- Monthly flow -->
+      <div class="two-col" style="margin-top:18px">
+        <div class="card">
+          <p class="card-label">월 소득 / 지출</p>
+          <div id="flowInputs" class="field-list"></div>
+        </div>
+        <div class="card">
+          <p class="card-label">월 현금 흐름</p>
+          <canvas id="flowChart" height="200"></canvas>
+          <div id="flowSummary" class="stat-row"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Page: 투자 -->
+    <section class="page" id="page-invest" data-title="투자 포트폴리오" data-label="투자">
+
+      <!-- Summary row -->
+      <div id="investSummary" class="stat-cards"></div>
+
+      <div class="two-col" style="margin-top:18px">
+        <!-- 401k -->
+        <div class="card">
+          <p class="card-label">401k</p>
+          <div id="k401Inputs" class="field-list"></div>
+          <div id="k401Funds" style="margin-top:16px"></div>
+        </div>
+        <!-- IRA -->
+        <div class="card">
+          <p class="card-label" id="iraLabel">IRA</p>
+          <div id="iraInputs" class="field-list"></div>
+          <div id="iraFunds" style="margin-top:16px"></div>
+        </div>
+      </div>
+
+      <!-- Stocks -->
+      <div class="card" style="margin-top:18px">
+        <div class="card-head">
+          <p class="card-label">주식 보유 현황 (Taxable)</p>
+          <button id="btnAddStock" class="btn-outline">+ 종목 추가</button>
+        </div>
+        <div class="table-wrap">
+          <table id="stockTable">
+            <thead>
+              <tr>
+                <th>티커</th><th>종목명</th>
+                <th class="r">수량</th><th class="r">매입가</th>
+                <th class="r">현재가</th><th class="r">평가금액</th>
+                <th class="r">손익</th><th class="r">수익률</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody id="stockBody"></tbody>
+            <tfoot><tr id="stockFoot"></tr></tfoot>
+          </table>
+        </div>
+      </div>
+
+      <!-- Asset allocation -->
+      <div class="two-col" style="margin-top:18px">
+        <div class="card">
+          <p class="card-label">자산 배분</p>
+          <canvas id="allocChart" height="220"></canvas>
+        </div>
+        <div class="card">
+          <p class="card-label">리밸런싱 가이드</p>
+          <div id="rebalGuide" style="margin-top:12px"></div>
+          <p class="card-label" style="margin-top:20px">목표 배분 설정</p>
+          <div id="targetInputs" class="field-list" style="margin-top:8px"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Page: 목표 -->
+    <section class="page" id="page-goals" data-title="목표 플래너" data-label="목표">
+
+      <div class="three-col">
+        <!-- College -->
+        <div class="card goal-card">
+          <div class="goal-icon" style="background:#fff8ec;color:#d99000">🎓</div>
+          <p class="card-label">대학 등록금</p>
+          <div id="collegeInputs" class="field-list"></div>
+          <div id="collegeResult" class="goal-result"></div>
+        </div>
+
+        <!-- House -->
+        <div class="card goal-card">
+          <div class="goal-icon" style="background:#f2f7ff;color:#276ef1">🏠</div>
+          <p class="card-label">주택 구매</p>
+          <div id="houseInputs" class="field-list"></div>
+          <div id="houseResult" class="goal-result"></div>
+        </div>
+
+        <!-- Retirement -->
+        <div class="card goal-card">
+          <div class="goal-icon" style="background:#eefaf5;color:#19a974">🏦</div>
+          <p class="card-label">은퇴 계획</p>
+          <div id="retireInputs" class="field-list"></div>
+          <div id="retireResult" class="goal-result"></div>
+        </div>
+      </div>
+
+      <!-- Combined chart -->
+      <div class="card" style="margin-top:18px">
+        <p class="card-label">연도별 재무 흐름 — 등록금 · 모기지 · 은퇴 잔고</p>
+        <canvas id="timelineChart" height="260"></canvas>
+      </div>
+    </section>
+
+    <!-- Page: AI 상담 -->
+    <section class="page" id="page-ai" data-title="AI 재무 상담" data-label="AI 상담">
+
+      <div class="card" style="max-width:680px;margin-bottom:18px">
+        <p class="card-label">Anthropic API 연결</p>
+        <div class="field-list" style="margin-top:12px">
+          <div class="field">
+            <label>API Key <span id="apiKeyMask" style="color:var(--green);font-size:12px"></span></label>
+            <input id="apiKeyInput" type="password" placeholder="sk-ant-..." />
           </div>
         </div>
-        <nav class="nav-list" id="desktopNav"></nav>
-        <div class="sidebar-card">
-          <span class="eyebrow">Version 1</span>
-          <p>Version 1 uses Terry family sample data stored locally in this browser. No bank connection or login is active.</p>
-          <button class="secondary-button" id="resetDataButton" type="button">Reset Terry Data</button>
+        <div style="display:flex;gap:10px;margin-top:12px">
+          <button id="btnSaveKey" class="btn-primary">저장</button>
+          <button id="btnClearKey" class="btn-outline">삭제</button>
+          <span id="apiStatus" class="save-badge" style="margin-left:auto"></span>
         </div>
-      </aside>
-
-      <main class="main-panel">
-        <header class="topbar">
-          <div>
-            <p class="eyebrow">Terry family planning center</p>
-            <h1 id="pageTitle">Overview Dashboard</h1>
-          </div>
-          <div class="topbar-actions">
-            <span class="save-status saved" id="saveStatus">Saved locally</span>
-            <select class="mobile-nav" id="mobileNav" aria-label="Choose page"></select>
-            <button class="primary-button" id="saveDataButton" type="button">Save Data</button>
-          </div>
-        </header>
-
-        <section class="advisor-strip" aria-label="Rule-based planning guidance">
-          <div class="advisor-orb">V1</div>
-          <div>
-            <p class="eyebrow">Rule-based guidance</p>
-            <h2 id="advisorHeadline">Keep liquidity protected before buying.</h2>
-            <p id="advisorText"></p>
-          </div>
-        </section>
-
-        <section class="risk-row" id="riskAlerts" aria-label="Risk alerts"></section>
-
-        <section class="page active" id="page-overview" data-page-title="Overview Dashboard">
-          <article class="panel decision-panel">
-            <div class="panel-heading">
-              <div>
-                <p class="eyebrow">Core decisions</p>
-                <h2>What Terry should decide first</h2>
-              </div>
-              <span class="pill">V1 rule-based</span>
-            </div>
-            <div class="decision-grid" id="decisionGrid"></div>
-          </article>
-          <div class="metric-grid" id="metricGrid"></div>
-          <div class="dashboard-grid">
-            <article class="panel wide">
-              <div class="panel-heading">
-                <div>
-                  <p class="eyebrow">Annual outlook</p>
-                  <h2>College, house, cash flow</h2>
-                </div>
-                <span class="pill">Terry family sample</span>
-              </div>
-              <canvas id="outlookChart" height="260" aria-label="Financial outlook chart"></canvas>
-            </article>
-            <article class="panel">
-              <div class="panel-heading">
-                <div>
-                  <p class="eyebrow">Readiness score</p>
-                  <h2>Decision compass</h2>
-                </div>
-              </div>
-              <div class="score-ring" id="scoreRing">
-                <span id="scoreValue">82</span>
-                <small>overall</small>
-              </div>
-              <div class="score-list" id="scoreList"></div>
-            </article>
-          </div>
-        </section>
-
-        <section class="page" id="page-investments" data-page-title="투자 포트폴리오">
-          <!-- Rendered dynamically by renderInvestments() -->
-        </section>
-
-        <section class="page" id="page-college" data-page-title="College Planner">
-          <div class="content-grid">
-            <article class="panel">
-              <div class="panel-heading">
-                <div>
-                  <p class="eyebrow">Purdue University</p>
-                  <h2>4-year cost projection</h2>
-                </div>
-              </div>
-              <div class="input-grid" data-form="college"></div>
-            </article>
-            <article class="panel wide">
-              <div class="panel-heading">
-                <div>
-                  <p class="eyebrow">Funding plan</p>
-                  <h2>Expected gap by year</h2>
-                </div>
-                <strong id="collegeGapTotal"></strong>
-              </div>
-              <canvas id="collegeChart" height="280" aria-label="College funding chart"></canvas>
-              <div class="table-wrap">
-                <table>
-                  <thead>
-                    <tr>
-                      <th>Year</th>
-                      <th>Projected Cost</th>
-                      <th>Family Support</th>
-                      <th>Gap or Surplus</th>
-                    </tr>
-                  </thead>
-                  <tbody id="collegeTable"></tbody>
-                </table>
-              </div>
-            </article>
-          </div>
-        </section>
-
-        <section class="page" id="page-house" data-page-title="House Purchase Planner">
-          <div class="content-grid">
-            <article class="panel">
-              <div class="panel-heading">
-                <div>
-                  <p class="eyebrow">Purchase target</p>
-                  <h2>Home readiness inputs</h2>
-                </div>
-              </div>
-              <div class="input-grid" data-form="house"></div>
-            </article>
-            <article class="panel wide">
-              <div class="house-summary">
-                <div>
-                  <p class="eyebrow">Estimated payment</p>
-                  <strong id="monthlyMortgage">$0</strong>
-                  <span>Principal, interest, taxes, insurance, HOA</span>
-                </div>
-                <div>
-                  <p class="eyebrow">Debt-to-income</p>
-                  <strong id="dtiValue">0%</strong>
-                  <span id="dtiLabel">Healthy</span>
-                </div>
-              </div>
-              <canvas id="mortgageChart" height="250" aria-label="Mortgage cost breakdown"></canvas>
-              <div class="recommendation-box" id="houseRecommendation"></div>
-            </article>
-          </div>
-        </section>
-
-        <section class="page" id="page-cashflow" data-page-title="Monthly Cash Flow">
-          <div class="content-grid">
-            <article class="panel">
-              <div class="panel-heading">
-                <div>
-                  <p class="eyebrow">Household numbers</p>
-                  <h2>Income, expenses, assets</h2>
-                </div>
-              </div>
-              <div class="input-grid" data-form="household"></div>
-            </article>
-            <article class="panel wide">
-              <div class="panel-heading">
-                <div>
-                  <p class="eyebrow">Monthly movement</p>
-                  <h2>Cash flow waterfall</h2>
-                </div>
-                <strong id="cashFlowValue"></strong>
-              </div>
-              <canvas id="cashFlowChart" height="280" aria-label="Cash flow chart"></canvas>
-              <div class="split-metrics">
-                <div><span>Emergency months</span><strong id="emergencyMonths"></strong></div>
-                <div><span>Savings rate</span><strong id="savingsRate"></strong></div>
-                <div><span>Net worth</span><strong id="netWorthInline"></strong></div>
-              </div>
-            </article>
-          </div>
-        </section>
-
-        <section class="page" id="page-simulator" data-page-title="Scenario Simulator">
-          <div class="content-grid">
-            <article class="panel">
-              <div class="panel-heading">
-                <div>
-                  <p class="eyebrow">What-if simulator</p>
-                  <h2>Adjust key decisions</h2>
-                </div>
-              </div>
-              <div class="input-grid" data-form="scenario"></div>
-            </article>
-            <article class="panel wide">
-              <div class="scenario-verdict" id="scenarioVerdict">
-                <span>Watch</span>
-                <strong>Review the trade-offs</strong>
-              </div>
-              <div class="scenario-result">
-                <div>
-                  <span>Post-decision cash reserve</span>
-                  <strong id="scenarioReserve"></strong>
-                </div>
-                <div>
-                  <span>Monthly cash flow after mortgage</span>
-                  <strong id="scenarioCashFlow"></strong>
-                </div>
-              </div>
-              <div class="scenario-compare" id="scenarioCompare" aria-label="Base plan versus scenario comparison"></div>
-              <canvas id="scenarioChart" height="280" aria-label="Scenario comparison chart"></canvas>
-              <div class="recommendation-box" id="scenarioRecommendation"></div>
-            </article>
-          </div>
-        </section>
-
-        <section class="page" id="page-funding" data-page-title="Tuition Funding Planner">
-          <div class="content-grid">
-            <article class="panel">
-              <div class="panel-heading">
-                <div>
-                  <p class="eyebrow">내 상황 입력</p>
-                  <h2>Tuition funding inputs</h2>
-                </div>
-              </div>
-              <div class="input-grid" data-form="funding" style="margin-top:16px"></div>
-            </article>
-            <article class="panel wide">
-              <div class="panel-heading">
-                <div>
-                  <p class="eyebrow">옵션별 실제 비용 비교</p>
-                  <h2>Which option costs least?</h2>
-                </div>
-                <span class="pill" id="fundingBestLabel">Calculating…</span>
-              </div>
-              <div id="fundingOptions" style="display:grid;gap:12px;margin-top:16px"></div>
-            </article>
-          </div>
-          <article class="panel" style="margin-top:18px">
-            <div class="panel-heading">
-              <div>
-                <p class="eyebrow">주식시장 시나리오 — 지금 팔 vs 기다릴 때</p>
-                <h2>Stock market scenario comparison</h2>
-              </div>
-            </div>
-            <canvas id="fundingChart" height="260" aria-label="Funding scenario chart"></canvas>
-            <div class="recommendation-box" id="fundingRecommendation" style="margin-top:16px"></div>
-          </article>
-          <article class="panel" style="margin-top:18px">
-            <div class="panel-heading">
-              <div>
-                <p class="eyebrow">Purdue Installment Plan 조합 전략</p>
-                <h2>Month-by-month payment plan</h2>
-              </div>
-            </div>
-            <div class="table-wrap">
-              <table>
-                <thead>
-                  <tr><th>납부 회차</th><th>시기</th><th>금액</th><th>권장 재원</th><th>세금/비용</th><th>401k 페널티</th></tr>
-                </thead>
-                <tbody id="installmentTable"></tbody>
-              </table>
-            </div>
-            <div class="split-metrics" id="installmentTotals" style="margin-top:16px"></div>
-          </article>
-        </section>
-
-        <section class="page" id="page-profile" data-page-title="Family Profile">
-          <article class="panel" style="max-width:720px;margin-bottom:18px">
-            <div class="panel-heading">
-              <div>
-                <p class="eyebrow">Setup — edit once, updates everywhere</p>
-                <h2>Your family profile</h2>
-              </div>
-            </div>
-            <div class="input-grid" data-form="profile" style="margin-top:16px"></div>
-          </article>
-          <article class="panel" style="max-width:720px;margin-bottom:18px">
-            <div class="panel-heading"><div><p class="eyebrow">Assets &amp; liabilities</p><h2>What you own and owe</h2></div></div>
-            <div class="input-grid" data-form="household" style="margin-top:16px"></div>
-          </article>
-          <article class="panel" style="max-width:720px">
-            <div class="panel-heading"><div><p class="eyebrow">Income &amp; monthly spending</p><h2>Monthly cash flow inputs</h2></div></div>
-            <div class="profile-income-grid" style="margin-top:16px"></div>
-          </article>
-        </section>
-
-        <section class="page" id="page-timeline" data-page-title="Life Timeline">
-          <article class="panel" style="margin-bottom:18px">
-            <div class="panel-heading">
-              <div>
-                <p class="eyebrow">Integrated view</p>
-                <h2>College · House · Retirement on one chart</h2>
-              </div>
-              <span class="pill">Projected</span>
-            </div>
-            <canvas id="timelineChart" height="320" aria-label="Life financial timeline"></canvas>
-          </article>
-          <div class="decision-grid" id="timelineCards" style="margin-bottom:18px"></div>
-          <article class="panel">
-            <div class="panel-heading"><div><p class="eyebrow">Year-by-year plan</p><h2>Net cash position</h2></div></div>
-            <div class="table-wrap">
-              <table>
-                <thead>
-                  <tr>
-                    <th>Year</th><th>Age</th><th>Event</th>
-                    <th>College cost</th><th>Mortgage</th>
-                    <th>Savings added</th><th>Cash position</th>
-                  </tr>
-                </thead>
-                <tbody id="timelineTable"></tbody>
-              </table>
-            </div>
-          </article>
-        </section>
-
-        <section class="page" id="page-tax" data-page-title="Tax Planning">
-          <div class="content-grid">
-            <article class="panel">
-              <div class="panel-heading">
-                <div>
-                  <p class="eyebrow">2024 federal estimate</p>
-                  <h2>Income &amp; deductions</h2>
-                </div>
-              </div>
-              <div class="input-grid" data-form="tax"></div>
-            </article>
-            <article class="panel wide">
-              <div class="house-summary" id="taxSummary">
-                <div>
-                  <p class="eyebrow">Estimated federal tax</p>
-                  <strong id="taxTotal">$0</strong>
-                  <span id="taxEffectiveRate">Effective rate: 0%</span>
-                </div>
-                <div>
-                  <p class="eyebrow">Marginal bracket</p>
-                  <strong id="taxMarginalRate">0%</strong>
-                  <span id="taxMarginalLabel">Top bracket</span>
-                </div>
-              </div>
-              <canvas id="taxChart" height="260" aria-label="Tax breakdown chart"></canvas>
-              <div class="split-metrics" id="taxMetrics">
-                <div><span>Gross income</span><strong id="taxGrossIncome"></strong></div>
-                <div><span>Taxable income</span><strong id="taxTaxableIncome"></strong></div>
-                <div><span>Quarterly estimate</span><strong id="taxQuarterly"></strong></div>
-              </div>
-              <div class="recommendation-box" id="taxRecommendation"></div>
-            </article>
-          </div>
-        </section>
-
-        <section class="page" id="page-retirement" data-page-title="Retirement Simulator">
-          <div class="content-grid">
-            <article class="panel">
-              <div class="panel-heading">
-                <div>
-                  <p class="eyebrow">Projection inputs</p>
-                  <h2>Retirement planning</h2>
-                </div>
-              </div>
-              <div class="input-grid" data-form="retirement"></div>
-            </article>
-            <article class="panel wide">
-              <div class="house-summary" id="retirementSummary">
-                <div>
-                  <p class="eyebrow">Projected at retirement</p>
-                  <strong id="retirementBalance">$0</strong>
-                  <span id="retirementYearsLabel">Years to grow</span>
-                </div>
-                <div>
-                  <p class="eyebrow">Annual withdrawal</p>
-                  <strong id="retirementWithdrawal">$0</strong>
-                  <span id="retirementCoverageLabel">Coverage estimate</span>
-                </div>
-              </div>
-              <canvas id="retirementChart" height="280" aria-label="Retirement growth chart"></canvas>
-              <div class="split-metrics">
-                <div><span>Years to retirement</span><strong id="retirementYearsLeft"></strong></div>
-                <div><span>Monthly in retirement</span><strong id="retirementMonthly"></strong></div>
-                <div><span>Coverage years</span><strong id="retirementCoverageYears"></strong></div>
-              </div>
-              <div class="recommendation-box" id="retirementRecommendation"></div>
-            </article>
-          </div>
-        </section>
-
-        <section class="page" id="page-reminders" data-page-title="Action Reminders">
-          <article class="panel" style="margin-bottom:18px">
-            <div class="panel-heading">
-              <div>
-                <p class="eyebrow">해야 할 일 — 날짜순</p>
-                <h2>Your financial action plan</h2>
-              </div>
-              <button class="secondary-button" id="addReminderButton" type="button">+ 추가</button>
-            </div>
-            <div id="reminderList" style="margin-top:16px;display:grid;gap:12px"></div>
-          </article>
-          <article class="panel">
-            <div class="panel-heading">
-              <div>
-                <p class="eyebrow">완료된 항목</p>
-                <h2>Done</h2>
-              </div>
-            </div>
-            <div id="reminderDoneList" style="margin-top:16px;display:grid;gap:10px"></div>
-          </article>
-
-          <!-- Add Reminder Modal -->
-          <div id="reminderModal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.4);z-index:100;display:none;align-items:center;justify-content:center">
-            <div style="background:white;border-radius:16px;padding:28px;width:min(480px,90vw);box-shadow:0 40px 80px rgba(0,0,0,0.2)">
-              <h3 style="margin:0 0 20px">새 액션 추가</h3>
-              <div style="display:grid;gap:14px">
-                <div class="field">
-                  <label for="newReminderTitle"><span>제목</span></label>
-                  <input id="newReminderTitle" type="text" placeholder="예: Purdue Installment Plan 등록" style="font-weight:700"/>
-                </div>
-                <div class="field">
-                  <label for="newReminderDate"><span>마감일</span></label>
-                  <input id="newReminderDate" type="date" style="font-weight:700"/>
-                </div>
-                <div class="field">
-                  <label for="newReminderNote"><span>메모</span></label>
-                  <input id="newReminderNote" type="text" placeholder="추가 설명"/>
-                </div>
-                <div class="field">
-                  <label for="newReminderCategory"><span>카테고리</span></label>
-                  <select id="newReminderCategory" style="min-height:42px;border:1px solid var(--line);border-radius:8px;padding:0 12px;font-weight:700;background:#fbfcfe">
-                    <option value="college">🎓 College</option>
-                    <option value="stock">📈 Stock</option>
-                    <option value="retirement">🏦 401k/Retirement</option>
-                    <option value="housing">🏠 Housing</option>
-                    <option value="tax">💰 Tax</option>
-                    <option value="other">📌 Other</option>
-                  </select>
-                </div>
-              </div>
-              <div style="display:flex;gap:10px;margin-top:20px;justify-content:flex-end">
-                <button class="secondary-button" id="cancelReminderButton">취소</button>
-                <button class="primary-button" id="saveReminderButton">저장</button>
-              </div>
-            </div>
-          </div>
-        </section>
-
-        <section class="page" id="page-goals" data-page-title="Goals">
-          <div class="goal-list" id="goalsList"></div>
-        </section>
-
-        <section class="page" id="page-reports" data-page-title="Reports">
-          <article class="panel report-panel">
-            <div class="panel-heading">
-              <div>
-                <p class="eyebrow">Printable summary</p>
-                <h2>Family finance snapshot</h2>
-              </div>
-              <button class="secondary-button" id="printReportButton" type="button">Print Report</button>
-            </div>
-            <div id="reportContent"></div>
-          </article>
-        </section>
-
-        <section class="page" id="page-ai" data-page-title="AI Financial Advisor">
-  <!-- API key setup card -->
-  <article class="panel" style="max-width:720px;margin-bottom:18px" id="aiKeyPanel">
-    <div class="panel-heading">
-      <div>
-        <p class="eyebrow">Anthropic API 설정</p>
-        <h2>AI 어드바이저 연결</h2>
+        <p style="margin:10px 0 0;font-size:12px;color:var(--muted)">키는 이 기기 브라우저에만 저장됩니다. <a href="https://console.anthropic.com" target="_blank" rel="noopener" style="color:var(--blue)">키 발급 →</a></p>
       </div>
-      <span class="pill" id="aiStatusPill">미연결</span>
-    </div>
-    <div style="margin-top:16px;display:grid;gap:12px">
-      <div class="field">
-        <label for="aiApiKey"><span>Anthropic API Key</span><span data-field-value id="aiKeyMask">—</span></label>
-        <input id="aiApiKey" type="password" placeholder="sk-ant-..." style="font-weight:700;font-family:monospace" />
-      </div>
-      <div style="display:flex;gap:10px">
-        <button class="primary-button" id="aiSaveKey">저장 &amp; 연결</button>
-        <button class="secondary-button" id="aiClearKey">키 삭제</button>
-      </div>
-      <p style="font-size:12px;color:var(--muted)">API 키는 이 기기의 브라우저에만 저장됩니다. 외부 서버로 전송되지 않습니다. <a href="https://console.anthropic.com" target="_blank" rel="noopener" style="color:var(--blue)">키 발급 →</a></p>
-    </div>
-  </article>
 
-  <!-- Chat interface -->
-  <article class="panel" style="display:flex;flex-direction:column;height:600px">
-    <div class="panel-heading" style="flex-shrink:0">
-      <div>
-        <p class="eyebrow">실시간 AI 재무 상담</p>
-        <h2>Terry 가족 전용 어드바이저</h2>
+      <div class="card chat-card">
+        <div id="chatMessages">
+          <div id="chatWelcome">
+            <div style="font-size:48px">🤖</div>
+            <strong>AI 재무 어드바이저</strong>
+            <p>API 키를 입력하면 현재 자산 데이터를 기반으로<br>한국어로 맞춤 재무 조언을 드립니다.</p>
+            <div id="chatSuggestions"></div>
+          </div>
+        </div>
+        <div class="chat-input-row">
+          <input id="chatInput" type="text" placeholder="질문을 입력하세요..." disabled />
+          <button id="btnSend" class="btn-primary" disabled>전송</button>
+        </div>
       </div>
-      <button class="secondary-button" id="aiClearChat" style="font-size:13px">대화 초기화</button>
-    </div>
-    <div id="aiMessages" style="flex:1;overflow-y:auto;padding:16px;display:flex;flex-direction:column;gap:12px;background:#f8fafc;border-radius:10px;margin:12px 0">
-      <div id="aiWelcome" style="text-align:center;padding:32px 16px;color:var(--muted)">
-        <div style="font-size:40px;margin-bottom:12px">🤖</div>
-        <strong style="display:block;margin-bottom:8px;color:var(--ink)">AI 재무 어드바이저</strong>
-        <p style="font-size:14px;line-height:1.6">API 키를 입력하고 재무 상황에 대해 자유롭게 질문하세요.<br>현재 입력된 자산·소득·목표 데이터를 기반으로 맞춤 조언을 드립니다.</p>
-        <div style="margin-top:16px;display:flex;flex-wrap:wrap;gap:8px;justify-content:center" id="aiSuggestions"></div>
-      </div>
-    </div>
-    <div style="display:flex;gap:10px;flex-shrink:0">
-      <input id="aiInput" type="text" placeholder="예: 아들 등록금과 집 구매를 어떻게 우선순위를 정해야 할까요?" style="flex:1;min-height:44px;border:1.5px solid var(--line);border-radius:10px;padding:0 14px;font-size:14px" disabled />
-      <button class="primary-button" id="aiSend" disabled style="min-width:72px">전송</button>
-    </div>
-  </article>
-</section>
-      </main>
-    </div>
+    </section>
 
-    <script src="app.js?v=ipad-landscape-v3"></script>
-    <script>
-      if ("serviceWorker" in navigator) {
-        navigator.serviceWorker.register("/sw.js").catch(() => {});
-      }
-    </script>
-  </body>
+  </main>
+</div>
+
+<!-- Add Stock Modal -->
+<div id="stockModal" class="modal-bg">
+  <div class="modal">
+    <h3>종목 추가</h3>
+    <div class="field-list">
+      <div class="field"><label>티커 (Ticker)</label><input id="ms_ticker" placeholder="AAPL" style="text-transform:uppercase" /></div>
+      <div class="field"><label>종목명</label><input id="ms_name" placeholder="Apple Inc" /></div>
+      <div class="field"><label>섹터</label>
+        <select id="ms_sector">
+          <option>Technology</option><option>Financials</option><option>Healthcare</option>
+          <option>Consumer</option><option>Industrials</option><option>Energy</option>
+          <option>Real Estate</option><option>Utilities</option>
+        </select>
+      </div>
+      <div class="field"><label>수량</label><input id="ms_shares" type="number" min="0.001" step="0.001" placeholder="100" /></div>
+      <div class="field"><label>평균 매입가 ($)</label><input id="ms_cost" type="number" min="0" step="0.01" placeholder="150.00" /></div>
+      <div class="field"><label>현재 주가 ($)</label><input id="ms_price" type="number" min="0" step="0.01" placeholder="180.00" /></div>
+    </div>
+    <div class="modal-actions">
+      <button id="btnCancelStock" class="btn-outline">취소</button>
+      <button id="btnConfirmStock" class="btn-primary">추가</button>
+    </div>
+  </div>
+</div>
+
+<script src="app.js"></script>
+<script>if ("serviceWorker" in navigator) navigator.serviceWorker.register("/finance/sw.js").catch(() => {});</script>
+</body>
 </html>
