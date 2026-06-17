@@ -134,6 +134,10 @@
           </div>
         </section>
 
+        <section class="page" id="page-investments" data-page-title="투자 포트폴리오">
+          <!-- Rendered dynamically by renderInvestments() -->
+        </section>
+
         <section class="page" id="page-college" data-page-title="College Planner">
           <div class="content-grid">
             <article class="panel">
@@ -507,6 +511,53 @@
             <div id="reportContent"></div>
           </article>
         </section>
+
+        <section class="page" id="page-ai" data-page-title="AI Financial Advisor">
+  <!-- API key setup card -->
+  <article class="panel" style="max-width:720px;margin-bottom:18px" id="aiKeyPanel">
+    <div class="panel-heading">
+      <div>
+        <p class="eyebrow">Anthropic API 설정</p>
+        <h2>AI 어드바이저 연결</h2>
+      </div>
+      <span class="pill" id="aiStatusPill">미연결</span>
+    </div>
+    <div style="margin-top:16px;display:grid;gap:12px">
+      <div class="field">
+        <label for="aiApiKey"><span>Anthropic API Key</span><span data-field-value id="aiKeyMask">—</span></label>
+        <input id="aiApiKey" type="password" placeholder="sk-ant-..." style="font-weight:700;font-family:monospace" />
+      </div>
+      <div style="display:flex;gap:10px">
+        <button class="primary-button" id="aiSaveKey">저장 &amp; 연결</button>
+        <button class="secondary-button" id="aiClearKey">키 삭제</button>
+      </div>
+      <p style="font-size:12px;color:var(--muted)">API 키는 이 기기의 브라우저에만 저장됩니다. 외부 서버로 전송되지 않습니다. <a href="https://console.anthropic.com" target="_blank" rel="noopener" style="color:var(--blue)">키 발급 →</a></p>
+    </div>
+  </article>
+
+  <!-- Chat interface -->
+  <article class="panel" style="display:flex;flex-direction:column;height:600px">
+    <div class="panel-heading" style="flex-shrink:0">
+      <div>
+        <p class="eyebrow">실시간 AI 재무 상담</p>
+        <h2>Terry 가족 전용 어드바이저</h2>
+      </div>
+      <button class="secondary-button" id="aiClearChat" style="font-size:13px">대화 초기화</button>
+    </div>
+    <div id="aiMessages" style="flex:1;overflow-y:auto;padding:16px;display:flex;flex-direction:column;gap:12px;background:#f8fafc;border-radius:10px;margin:12px 0">
+      <div id="aiWelcome" style="text-align:center;padding:32px 16px;color:var(--muted)">
+        <div style="font-size:40px;margin-bottom:12px">🤖</div>
+        <strong style="display:block;margin-bottom:8px;color:var(--ink)">AI 재무 어드바이저</strong>
+        <p style="font-size:14px;line-height:1.6">API 키를 입력하고 재무 상황에 대해 자유롭게 질문하세요.<br>현재 입력된 자산·소득·목표 데이터를 기반으로 맞춤 조언을 드립니다.</p>
+        <div style="margin-top:16px;display:flex;flex-wrap:wrap;gap:8px;justify-content:center" id="aiSuggestions"></div>
+      </div>
+    </div>
+    <div style="display:flex;gap:10px;flex-shrink:0">
+      <input id="aiInput" type="text" placeholder="예: 아들 등록금과 집 구매를 어떻게 우선순위를 정해야 할까요?" style="flex:1;min-height:44px;border:1.5px solid var(--line);border-radius:10px;padding:0 14px;font-size:14px" disabled />
+      <button class="primary-button" id="aiSend" disabled style="min-width:72px">전송</button>
+    </div>
+  </article>
+</section>
       </main>
     </div>
 

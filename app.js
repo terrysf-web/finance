@@ -150,6 +150,42 @@ const sampleData = {
     homeEquity: 175000,
     debts: 52000
   },
+  accounts: {
+    k401: {
+      balance: 620000,
+      employerMatchPct: 4,
+      myContribPct: 8,
+      vestingYears: 3,
+      funds: [
+        { name: "Large Cap Index (VIIIX)", pct: 55, type: "stock" },
+        { name: "Bond Index (VBTIX)", pct: 25, type: "bond" },
+        { name: "International Index (VTPSX)", pct: 15, type: "stock" },
+        { name: "Money Market", pct: 5, type: "cash" }
+      ]
+    },
+    ira: {
+      balance: 122000,
+      type: "Roth",
+      annualContrib: 7500,
+      funds: [
+        { name: "S&P 500 Index (FXAIX)", pct: 70, type: "stock" },
+        { name: "Small Cap Growth (FSSNX)", pct: 20, type: "stock" },
+        { name: "Bond Fund (FXNAX)", pct: 10, type: "bond" }
+      ]
+    },
+    target: {
+      stocks: 70,
+      bonds: 20,
+      cash: 10
+    }
+  },
+  stocks: [
+    { id: 1, ticker: "NVDA", name: "NVIDIA Corp", shares: 25, costBasis: 82.50, currentPrice: 215.40, sector: "Technology" },
+    { id: 2, ticker: "AVGO", name: "Broadcom Inc", shares: 18, costBasis: 142.00, currentPrice: 178.20, sector: "Technology" },
+    { id: 3, ticker: "FRMI", name: "Forestar Group", shares: 120, costBasis: 24.80, currentPrice: 18.30, sector: "Real Estate" },
+    { id: 4, ticker: "PBI", name: "Pitney Bowes", shares: 200, costBasis: 5.40, currentPrice: 3.85, sector: "Industrials" },
+    { id: 5, ticker: "NESR", name: "Natl Energy Svc", shares: 150, costBasis: 9.20, currentPrice: 7.10, sector: "Energy" }
+  ],
   college: {
     annualCost: 45200,
     inflationRate: 4.4,
@@ -209,6 +245,7 @@ let hasUnsavedChanges = false;
 const pages = [
   ["overview", "OD", "Overview Dashboard"],
   ["reminders", "✅", "Action Reminders"],
+  ["investments", "📈", "투자 포트폴리오"],
   ["timeline", "TL", "Life Timeline"],
   ["funding", "🎓", "Tuition Funding"],
   ["college", "CP", "College Planner"],
@@ -219,6 +256,7 @@ const pages = [
   ["retirement", "RT", "Retirement Simulator"],
   ["goals", "GL", "Goals"],
   ["reports", "RP", "Reports"],
+  ["ai", "🤖", "AI 어드바이저"],
   ["profile", "⚙", "Family Profile"]
 ];
 
@@ -954,6 +992,8 @@ function setPage(id) {
   document.getElementById("mobileNav").value = id;
   document.getElementById("pageTitle").textContent = document.getElementById(`page-${id}`).dataset.pageTitle;
   renderAll();
+  if (id === "ai") initAiPage();
+  if (id === "investments") renderInvestments();
 }
 
 function renderForms() {
@@ -1611,6 +1651,695 @@ document.getElementById("saveReminderButton").addEventListener("click", () => {
   document.getElementById("newReminderNote").value = "";
   renderReminders();
 });
+
+// ── AI Chat Advisor ──────────────────────────────────────────────
+const AI_KEY_STORAGE = "terry-finance-ai-key";
+let aiMessages = []; // {role, content}
+
+function getAiKey() {
+  return localStorage.getItem(AI_KEY_STORAGE) || "";
+}
+
+function buildFinancialContext() {
+  const h = state.household;
+  const c = state.college;
+  const house = state.house;
+  const r = state.retirement;
+  const p = state.profile;
+  const calc = getCalculations();
+  const retCalc = getRetirementCalculations();
+  const taxCalc = getTaxCalculations();
+
+  const invCalc = getInvestmentCalc();
+  const stocks = invCalc.stocks;
+  const acc = getAccountsState();
+
+  return `당신은 Terry 가족의 전담 재무 어드바이저입니다. 아래는 현재 Terry 가족의 실제 재무 데이터입니다. 이 데이터를 기반으로 한국어로 친절하고 구체적인 재무 조언을 해주세요.
+
+## Terry 가족 프로필
+- 부모 이름: ${p.parentName}, 나이: ${p.parentAge}세
+- 자녀: ${p.studentName}, 대학: ${p.school}
+- 목표 은퇴 나이: ${p.retirementTargetAge}세 (${p.retirementTargetAge - p.parentAge}년 후)
+
+## 현재 자산 현황
+- 현금/예금: ${money(h.cash)}
+- 주식 계좌 (Taxable): ${money(invCalc.taxableTotal)} (${stocks.length}개 종목)
+- 401k 잔고: ${money(invCalc.k401Total)}
+- ${acc.ira.type} IRA 잔고: ${money(invCalc.iraTotal)}
+- 현재 주택 자산 (equity): ${money(h.homeEquity)}
+- 부채 (모기지 제외): ${money(h.debts)}
+- **순자산: ${money(calc.netWorth)}**
+
+## 개별 주식 보유 현황
+${stocks.map(s => {
+  const mktVal = s.shares * s.currentPrice;
+  const gl = mktVal - s.shares * s.costBasis;
+  return `- ${s.ticker} (${s.name}): ${s.shares}주 × $${s.currentPrice} = ${money(mktVal)} (손익: ${gl >= 0 ? "+" : ""}${money(gl)})`;
+}).join("\n")}
+
+## 자산 배분 현황
+- 주식: ${invCalc.stocksPct.toFixed(1)}% (목표 ${acc.target.stocks}%)
+- 채권: ${invCalc.bondsPct.toFixed(1)}% (목표 ${acc.target.bonds}%)
+- 현금: ${invCalc.cashPct.toFixed(1)}% (목표 ${acc.target.cash}%)
+
+## 401k 현황
+- 잔고: ${money(invCalc.k401Total)}
+- 내 기여율: ${acc.k401.myContribPct}% (연 ${money(invCalc.myContrib)})
+- 고용주 매칭: ${acc.k401.employerMatchPct}% (연 ${money(invCalc.employerContrib)})
+- 펀드 배분: ${acc.k401.funds.map(f => `${f.name} ${f.pct}%`).join(", ")}
+
+## IRA 현황
+- 잔고: ${money(invCalc.iraTotal)} (${acc.ira.type})
+- 연간 기여 한도: ${money(acc.ira.annualContrib)}
+- 펀드 배분: ${acc.ira.funds.map(f => `${f.name} ${f.pct}%`).join(", ")}
+
+## 월 소득 및 지출
+- 월 소득: ${money(h.monthlyIncome)}
+- 월 지출: ${money(h.monthlyExpenses)}
+- 월 은퇴 기여금: ${money(h.retirementContribution)}
+- 월 대학 저축: ${money(h.collegeMonthlySavings)}
+- **월 잉여 현금: ${money(calc.monthlyCashFlow)}**
+- 비상금 보유 기간: ${calc.emergencyMonths.toFixed(1)}개월
+
+## 대학 등록금 계획 (${p.school})
+- 현재 연간 등록금: ${money(c.annualCost)}
+- ${p.studentStartYear}년 후 시작 예정
+- 대학 저축 잔고: ${money(c.collegeFund)}
+- 연간 가족 지원 목표: ${money(c.annualFamilySupport)}
+- 연간 학자금 대출: ${money(c.studentLoan)}
+- **예상 4년 총 부족분: ${money(calc.collegeGap)}**
+
+## 주택 구매 계획
+- 목표 주택 가격: ${money(house.housePrice)}
+- 다운페이먼트: ${money(house.downPayment)}
+- 이자율: ${house.interestRate}%
+- 대출 기간: ${house.loanYears}년
+- ${house.purchaseDelayYears}년 후 구매 예정
+- **월 모기지 총액 (PITI+HOA): ${money(calc.mortgage.total)}**
+- **DTI (부채 대비 소득 비율): ${calc.dti.toFixed(1)}%**
+
+## 은퇴 계획
+- 현재 은퇴 계좌 잔고: ${money(h.retirement)}
+- 예상 연 수익률: ${r.annualReturn}%
+- **은퇴 시 예상 잔고: ${money(retCalc.projectedBalance)}**
+- **은퇴 후 월 인출 가능액: ${money(retCalc.monthlyWithdrawal)}**
+- **예상 커버 기간: ${retCalc.coverageYears >= 99 ? "30년 이상" : retCalc.coverageYears + "년"}**
+
+## 세금 현황
+- 연 소득: ${money(taxCalc.grossIncome)}
+- 예상 연방세: ${money(taxCalc.totalFederal)}
+- 실효세율: ${taxCalc.effectiveRate.toFixed(1)}%
+- 한계세율: ${taxCalc.marginalRate}%
+
+## 현재 재무 건강도
+- 종합 점수: ${calc.score}/100
+- 비상금: ${calc.emergencyMonths < 6 ? "⚠️ 부족 (" + calc.emergencyMonths.toFixed(1) + "개월)" : "✅ 양호 (" + calc.emergencyMonths.toFixed(1) + "개월)"}
+- DTI: ${calc.dti > 36 ? "⚠️ 주의 (" + calc.dti.toFixed(1) + "%)" : "✅ 양호 (" + calc.dti.toFixed(1) + "%)"}
+- 월 현금흐름: ${calc.monthlyCashFlow < 0 ? "❌ 마이너스" : "✅ " + money(calc.monthlyCashFlow)}
+
+위 데이터를 바탕으로 사용자 질문에 답변해주세요. 숫자를 인용할 때는 구체적인 금액을 언급하고, 실행 가능한 조언을 제공하세요.`;
+}
+
+async function sendAiMessage() {
+  const input = document.getElementById("aiInput");
+  const userText = input.value.trim();
+  if (!userText) return;
+
+  const apiKey = getAiKey();
+  if (!apiKey) {
+    alert("API 키를 먼저 입력해주세요.");
+    return;
+  }
+
+  input.value = "";
+  input.disabled = true;
+  document.getElementById("aiSend").disabled = true;
+
+  // Hide welcome screen
+  const welcome = document.getElementById("aiWelcome");
+  if (welcome) welcome.style.display = "none";
+
+  // Add user message
+  aiMessages.push({ role: "user", content: userText });
+  renderAiMessages(true);
+
+  // Add loading indicator
+  const messagesEl = document.getElementById("aiMessages");
+  const loadingId = "ai-loading-" + Date.now();
+  const loadingDiv = document.createElement("div");
+  loadingDiv.id = loadingId;
+  loadingDiv.style.cssText = "display:flex;align-items:center;gap:10px;padding:12px 16px;background:white;border-radius:12px;border:1px solid var(--line);max-width:80%;align-self:flex-start";
+  loadingDiv.innerHTML = `<div style="width:8px;height:8px;border-radius:50%;background:var(--blue);animation:pulse 1s infinite"></div><span style="color:var(--muted);font-size:14px">AI가 분석 중...</span>`;
+  messagesEl.appendChild(loadingDiv);
+  messagesEl.scrollTop = messagesEl.scrollHeight;
+
+  try {
+    const systemPrompt = buildFinancialContext();
+    const response = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-api-key": apiKey,
+        "anthropic-version": "2023-06-01",
+        "anthropic-dangerous-direct-browser-access": "true"
+      },
+      body: JSON.stringify({
+        model: "claude-haiku-4-5-20251001",
+        max_tokens: 1024,
+        system: systemPrompt,
+        messages: aiMessages
+      })
+    });
+
+    if (!response.ok) {
+      const err = await response.json().catch(() => ({}));
+      throw new Error(err.error?.message || `API 오류 (${response.status})`);
+    }
+
+    const data = await response.json();
+    const assistantText = data.content?.[0]?.text || "(응답 없음)";
+    aiMessages.push({ role: "assistant", content: assistantText });
+
+    loadingDiv.remove();
+    renderAiMessages(false);
+  } catch (err) {
+    loadingDiv.remove();
+    const errDiv = document.createElement("div");
+    errDiv.style.cssText = "padding:12px 16px;background:#fff2f2;border-radius:12px;border:1px solid #fca5a5;color:#b91c1c;font-size:14px;max-width:80%;align-self:flex-start";
+    errDiv.textContent = `오류: ${err.message}`;
+    messagesEl.appendChild(errDiv);
+    messagesEl.scrollTop = messagesEl.scrollHeight;
+    // Remove failed user message from history
+    aiMessages.pop();
+  } finally {
+    input.disabled = false;
+    document.getElementById("aiSend").disabled = false;
+    input.focus();
+  }
+}
+
+function renderAiMessages(scrollToBottom) {
+  const container = document.getElementById("aiMessages");
+  const welcome = document.getElementById("aiWelcome");
+
+  // Clear existing messages (keep welcome div)
+  Array.from(container.children).forEach(child => {
+    if (child.id !== "aiWelcome") child.remove();
+  });
+
+  aiMessages.forEach(msg => {
+    const isUser = msg.role === "user";
+    const div = document.createElement("div");
+    div.style.cssText = `
+      padding:12px 16px;border-radius:12px;font-size:14px;line-height:1.6;
+      max-width:85%;word-break:break-word;white-space:pre-wrap;
+      ${isUser
+        ? "background:var(--blue);color:white;align-self:flex-end;border-bottom-right-radius:4px"
+        : "background:white;color:var(--ink);align-self:flex-start;border:1px solid var(--line);border-bottom-left-radius:4px"}
+    `;
+    div.textContent = msg.content;
+    container.appendChild(div);
+  });
+
+  if (scrollToBottom) {
+    container.scrollTop = container.scrollHeight;
+  }
+}
+
+function initAiPage() {
+  const key = getAiKey();
+  const pill = document.getElementById("aiStatusPill");
+  const keyMask = document.getElementById("aiKeyMask");
+  const input = document.getElementById("aiInput");
+  const sendBtn = document.getElementById("aiSend");
+
+  if (key) {
+    pill.textContent = "연결됨 ✓";
+    pill.style.background = "var(--green)";
+    pill.style.color = "white";
+    keyMask.textContent = key.slice(0, 10) + "..." + key.slice(-4);
+    input.disabled = false;
+    sendBtn.disabled = false;
+  } else {
+    pill.textContent = "미연결";
+    pill.style.background = "";
+    pill.style.color = "";
+    keyMask.textContent = "—";
+    input.disabled = true;
+    sendBtn.disabled = true;
+  }
+
+  // Suggested questions
+  const suggestions = [
+    "아들 등록금과 집 구매를 어떻게 우선순위를 정해야 할까요?",
+    "은퇴까지 얼마나 더 저축해야 할까요?",
+    "지금 주식을 팔아서 등록금을 낼까요, 401k를 써야 할까요?",
+    "비상금이 충분한가요?",
+    "집 구매 타이밍이 언제가 좋을까요?"
+  ];
+  const sugEl = document.getElementById("aiSuggestions");
+  if (sugEl) {
+    sugEl.innerHTML = suggestions.map(s => `
+      <button onclick="document.getElementById('aiInput').value=${JSON.stringify(s)};document.getElementById('aiInput').focus()" style="
+        padding:8px 14px;border-radius:20px;border:1.5px solid var(--line);
+        background:white;font-size:12px;cursor:pointer;color:var(--ink);
+        transition:border-color 0.2s
+      " onmouseover="this.style.borderColor='var(--blue)'" onmouseout="this.style.borderColor='var(--line)'">${s}</button>
+    `).join("");
+  }
+}
+
+document.getElementById("aiSaveKey").addEventListener("click", () => {
+  const val = document.getElementById("aiApiKey").value.trim();
+  if (!val.startsWith("sk-ant-")) {
+    alert("올바른 Anthropic API 키를 입력해주세요. (sk-ant-로 시작)");
+    return;
+  }
+  localStorage.setItem(AI_KEY_STORAGE, val);
+  document.getElementById("aiApiKey").value = "";
+  initAiPage();
+});
+
+document.getElementById("aiClearKey").addEventListener("click", () => {
+  if (confirm("API 키를 삭제할까요?")) {
+    localStorage.removeItem(AI_KEY_STORAGE);
+    initAiPage();
+  }
+});
+
+document.getElementById("aiClearChat").addEventListener("click", () => {
+  aiMessages = [];
+  renderAiMessages(false);
+  const welcome = document.getElementById("aiWelcome");
+  if (welcome) welcome.style.display = "";
+  initAiPage();
+});
+
+document.getElementById("aiSend").addEventListener("click", sendAiMessage);
+document.getElementById("aiInput").addEventListener("keydown", e => {
+  if (e.key === "Enter" && !e.shiftKey) {
+    e.preventDefault();
+    sendAiMessage();
+  }
+});
+
+// Add pulse animation for loading
+const pulseStyle = document.createElement("style");
+pulseStyle.textContent = `@keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.3} }`;
+document.head.appendChild(pulseStyle);
+
+// ── Investment Portfolio ──────────────────────────────────────────────
+const STOCKS_KEY = "terry-finance-stocks-v1";
+
+function loadStocks() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(STOCKS_KEY));
+    return saved && saved.length > 0 ? saved : sampleData.stocks.map(s => ({ ...s }));
+  } catch { return sampleData.stocks.map(s => ({ ...s })); }
+}
+
+function saveStocks(stocks) {
+  localStorage.setItem(STOCKS_KEY, JSON.stringify(stocks));
+}
+
+function getAccountsState() {
+  return state.accounts || sampleData.accounts;
+}
+
+function getInvestmentCalc() {
+  const stocks = loadStocks();
+  const acc = getAccountsState();
+
+  const totalStockValue = stocks.reduce((s, st) => s + st.shares * st.currentPrice, 0);
+  const totalCostBasis = stocks.reduce((s, st) => s + st.shares * st.costBasis, 0);
+  const totalGainLoss = totalStockValue - totalCostBasis;
+
+  // asset allocation across all accounts
+  const k401Total = acc.k401.balance;
+  const iraTotal = acc.ira.balance;
+  const taxableTotal = totalStockValue;
+  const cashTotal = state.household.cash;
+  const grandTotal = k401Total + iraTotal + taxableTotal + cashTotal;
+
+  function fundsToAllocation(funds, totalBalance) {
+    let stocks = 0, bonds = 0, cash = 0;
+    funds.forEach(f => {
+      const val = totalBalance * f.pct / 100;
+      if (f.type === "stock") stocks += val;
+      else if (f.type === "bond") bonds += val;
+      else cash += val;
+    });
+    return { stocks, bonds, cash };
+  }
+
+  const k401Alloc = fundsToAllocation(acc.k401.funds, k401Total);
+  const iraAlloc = fundsToAllocation(acc.ira.funds, iraTotal);
+  const totalStocks = k401Alloc.stocks + iraAlloc.stocks + taxableTotal;
+  const totalBonds = k401Alloc.bonds + iraAlloc.bonds;
+  const totalCash = k401Alloc.cash + iraAlloc.cash + cashTotal;
+  const totalAssets = totalStocks + totalBonds + totalCash;
+
+  const stocksPct = totalAssets > 0 ? (totalStocks / totalAssets) * 100 : 0;
+  const bondsPct = totalAssets > 0 ? (totalBonds / totalAssets) * 100 : 0;
+  const cashPct = totalAssets > 0 ? (totalCash / totalAssets) * 100 : 0;
+
+  const target = acc.target;
+  const stocksDrift = stocksPct - target.stocks;
+  const bondsDrift = bondsPct - target.bonds;
+  const cashDrift = cashPct - target.cash;
+
+  // 401k annual contribution
+  const annualSalary = state.household.monthlyIncome * 12;
+  const myContrib = annualSalary * acc.k401.myContribPct / 100;
+  const employerContrib = annualSalary * Math.min(acc.k401.myContribPct, acc.k401.employerMatchPct) / 100;
+
+  return {
+    stocks, totalStockValue, totalCostBasis, totalGainLoss,
+    k401Total, iraTotal, taxableTotal, cashTotal, grandTotal,
+    totalStocks, totalBonds, totalCash, totalAssets,
+    stocksPct, bondsPct, cashPct,
+    stocksDrift, bondsDrift, cashDrift,
+    myContrib, employerContrib
+  };
+}
+
+function renderInvestments() {
+  const el = document.getElementById("page-investments");
+  if (!el) return;
+
+  const acc = getAccountsState();
+  const calc = getInvestmentCalc();
+  const stocks = calc.stocks;
+
+  const sectorColors = {
+    Technology: "#276ef1", "Real Estate": "#7c5cff",
+    Industrials: "#14b8c4", Energy: "#d99000", Healthcare: "#19a974",
+    Financials: "#d94b4b", "Consumer": "#ff9900"
+  };
+
+  // Drift status helper
+  function driftBadge(drift) {
+    const abs = Math.abs(drift);
+    if (abs < 3) return `<span style="color:var(--green);font-weight:700">±${abs.toFixed(1)}% 균형</span>`;
+    if (abs < 8) return `<span style="color:var(--amber);font-weight:700">${drift > 0 ? "+" : ""}${drift.toFixed(1)}% 주의</span>`;
+    return `<span style="color:var(--red);font-weight:700">${drift > 0 ? "+" : ""}${drift.toFixed(1)}% 리밸런싱 필요</span>`;
+  }
+
+  el.innerHTML = `
+    <!-- 1. 포트폴리오 요약 -->
+    <div class="metric-grid" style="margin-bottom:18px">
+      ${[
+        ["총 투자 자산", money(calc.grandTotal, true), "현금 포함 전체"],
+        ["401k 잔고", money(calc.k401Total, true), "세전 은퇴 계좌"],
+        ["IRA 잔고 (${acc.ira.type})", money(calc.iraTotal, true), acc.ira.type + " IRA"],
+        ["주식 계좌", money(calc.taxableTotal, true), `${stocks.length}개 종목`],
+        ["총 평가손익", (calc.totalGainLoss >= 0 ? "+" : "") + money(calc.totalGainLoss, true), calc.totalCostBasis > 0 ? ((calc.totalGainLoss / calc.totalCostBasis) * 100).toFixed(1) + "% 수익률" : "—"],
+        ["고용주 매칭", money(calc.employerContrib, true), `연간 (${acc.k401.employerMatchPct}% match)`]
+      ].map(([t, v, s]) => `<article class="metric-card"><span>${t}</span><strong style="color:${t === "총 평가손익" && calc.totalGainLoss >= 0 ? "var(--green)" : t === "총 평가손익" ? "var(--red)" : ""}">${v}</strong><small>${s}</small></article>`).join("")}
+    </div>
+
+    <div class="dashboard-grid" style="margin-bottom:18px">
+      <!-- 2. 자산 배분 도넛 -->
+      <article class="panel">
+        <div class="panel-heading"><div><p class="eyebrow">전체 자산 배분</p><h2>Asset Allocation</h2></div></div>
+        <canvas id="allocDonut" height="220"></canvas>
+        <div style="margin-top:16px;display:grid;gap:8px">
+          ${[
+            ["주식 (Stocks)", calc.stocksPct, calc.totalStocks, acc.target.stocks, calc.stocksDrift],
+            ["채권 (Bonds)", calc.bondsPct, calc.totalBonds, acc.target.bonds, calc.bondsDrift],
+            ["현금 (Cash)", calc.cashPct, calc.totalCash, acc.target.cash, calc.cashDrift]
+          ].map(([label, pct, val, target, drift]) => `
+            <div style="display:grid;grid-template-columns:1fr auto auto;gap:8px;align-items:center;font-size:13px">
+              <span>${label}</span>
+              <span style="color:var(--muted)">${pct.toFixed(1)}% (목표 ${target}%)</span>
+              ${driftBadge(drift)}
+            </div>
+            <div style="height:6px;background:var(--line);border-radius:4px;margin-bottom:4px">
+              <div style="height:6px;border-radius:4px;background:var(--blue);width:${Math.min(pct, 100)}%"></div>
+            </div>
+          `).join("")}
+        </div>
+      </article>
+
+      <!-- 3. 계좌별 비중 -->
+      <article class="panel wide">
+        <div class="panel-heading"><div><p class="eyebrow">계좌별 현황</p><h2>Account Breakdown</h2></div></div>
+        <canvas id="accountChart" height="200"></canvas>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:16px">
+          <!-- 401k -->
+          <div style="padding:16px;border-radius:10px;background:var(--soft);border:1px solid var(--line)">
+            <p class="eyebrow" style="margin:0 0 8px">401k</p>
+            <strong style="font-size:20px;display:block;margin-bottom:12px">${money(calc.k401Total)}</strong>
+            ${acc.k401.funds.map(f => `
+              <div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:6px">
+                <span style="color:var(--muted)">${f.name}</span>
+                <strong>${f.pct}%</strong>
+              </div>
+              <div style="height:4px;background:var(--line);border-radius:2px;margin-bottom:8px">
+                <div style="height:4px;border-radius:2px;background:${f.type==="stock"?"var(--blue)":f.type==="bond"?"var(--cyan)":"var(--green)"};width:${f.pct}%"></div>
+              </div>
+            `).join("")}
+            <div style="margin-top:12px;font-size:12px;color:var(--muted)">
+              내 기여율: <strong>${acc.k401.myContribPct}%</strong> ·
+              고용주 매칭: <strong>${acc.k401.employerMatchPct}%</strong>
+            </div>
+            <div style="margin-top:4px;font-size:12px;color:var(--muted)">
+              연간 내 기여: <strong style="color:var(--ink)">${money(calc.myContrib)}</strong> ·
+              매칭: <strong style="color:var(--green)">${money(calc.employerContrib)}</strong>
+            </div>
+          </div>
+          <!-- IRA -->
+          <div style="padding:16px;border-radius:10px;background:var(--soft);border:1px solid var(--line)">
+            <p class="eyebrow" style="margin:0 0 8px">${acc.ira.type} IRA</p>
+            <strong style="font-size:20px;display:block;margin-bottom:12px">${money(calc.iraTotal)}</strong>
+            ${acc.ira.funds.map(f => `
+              <div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:6px">
+                <span style="color:var(--muted)">${f.name}</span>
+                <strong>${f.pct}%</strong>
+              </div>
+              <div style="height:4px;background:var(--line);border-radius:2px;margin-bottom:8px">
+                <div style="height:4px;border-radius:2px;background:${f.type==="stock"?"var(--blue)":f.type==="bond"?"var(--cyan)":"var(--green)"};width:${f.pct}%"></div>
+              </div>
+            `).join("")}
+            <div style="margin-top:12px;font-size:12px;color:var(--muted)">
+              연간 기여 한도: <strong>${money(acc.ira.annualContrib)}</strong> (50세 이상 캐치업 포함)
+            </div>
+            <div style="margin-top:4px;font-size:12px">
+              ${acc.ira.type === "Roth"
+                ? `<span style="color:var(--green)">✓ Roth: 인출 시 비과세</span>`
+                : `<span style="color:var(--amber)">Traditional: 인출 시 과세</span>`}
+            </div>
+          </div>
+        </div>
+      </article>
+    </div>
+
+    <!-- 4. 개별 주식 -->
+    <article class="panel" style="margin-bottom:18px">
+      <div class="panel-heading">
+        <div><p class="eyebrow">개별 주식 계좌 (Taxable)</p><h2>Stock Holdings</h2></div>
+        <button class="secondary-button" id="addStockBtn" type="button">+ 종목 추가</button>
+      </div>
+      <div class="table-wrap" style="margin-top:16px">
+        <table>
+          <thead>
+            <tr>
+              <th>종목</th><th>이름</th><th>섹터</th>
+              <th style="text-align:right">수량</th>
+              <th style="text-align:right">매입가</th>
+              <th style="text-align:right">현재가</th>
+              <th style="text-align:right">평가금액</th>
+              <th style="text-align:right">손익</th>
+              <th style="text-align:right">수익률</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody id="stocksTableBody">
+            ${stocks.map(st => {
+              const mktVal = st.shares * st.currentPrice;
+              const costTotal = st.shares * st.costBasis;
+              const gl = mktVal - costTotal;
+              const glPct = costTotal > 0 ? (gl / costTotal) * 100 : 0;
+              const color = gl >= 0 ? "var(--green)" : "var(--red)";
+              return `<tr data-stock-id="${st.id}">
+                <td><strong style="color:var(--blue)">${st.ticker}</strong></td>
+                <td style="font-size:13px;color:var(--muted)">${st.name}</td>
+                <td><span style="padding:2px 8px;border-radius:4px;background:${sectorColors[st.sector] || "var(--muted)"}22;color:${sectorColors[st.sector] || "var(--muted)"};font-size:11px;font-weight:700">${st.sector}</span></td>
+                <td style="text-align:right"><input type="number" class="stock-edit" data-id="${st.id}" data-field="shares" value="${st.shares}" style="width:70px;text-align:right;border:1px solid var(--line);border-radius:6px;padding:4px 8px;font-size:13px" /></td>
+                <td style="text-align:right"><input type="number" class="stock-edit" data-id="${st.id}" data-field="costBasis" value="${st.costBasis}" step="0.01" style="width:90px;text-align:right;border:1px solid var(--line);border-radius:6px;padding:4px 8px;font-size:13px" /></td>
+                <td style="text-align:right"><input type="number" class="stock-edit" data-id="${st.id}" data-field="currentPrice" value="${st.currentPrice}" step="0.01" style="width:90px;text-align:right;border:1px solid var(--line);border-radius:6px;padding:4px 8px;font-size:13px" /></td>
+                <td style="text-align:right;font-weight:700">${money(mktVal)}</td>
+                <td style="text-align:right;font-weight:700;color:${color}">${gl >= 0 ? "+" : ""}${money(gl)}</td>
+                <td style="text-align:right;font-weight:700;color:${color}">${glPct >= 0 ? "+" : ""}${glPct.toFixed(1)}%</td>
+                <td><button onclick="deleteStock(${st.id})" style="border:0;background:none;cursor:pointer;color:var(--muted);font-size:18px;line-height:1" title="삭제">×</button></td>
+              </tr>`;
+            }).join("")}
+          </tbody>
+          <tfoot>
+            <tr style="font-weight:800;background:var(--soft)">
+              <td colspan="6">합계</td>
+              <td style="text-align:right">${money(calc.totalStockValue)}</td>
+              <td style="text-align:right;color:${calc.totalGainLoss >= 0 ? "var(--green)" : "var(--red)"}">
+                ${calc.totalGainLoss >= 0 ? "+" : ""}${money(calc.totalGainLoss)}
+              </td>
+              <td style="text-align:right;color:${calc.totalGainLoss >= 0 ? "var(--green)" : "var(--red)"}">
+                ${calc.totalCostBasis > 0 ? ((calc.totalGainLoss / calc.totalCostBasis) * 100).toFixed(1) + "%" : "—"}
+              </td>
+              <td></td>
+            </tr>
+          </tfoot>
+        </table>
+      </div>
+    </article>
+
+    <!-- 5. 리밸런싱 추천 -->
+    <article class="panel" style="margin-bottom:18px">
+      <div class="panel-heading"><div><p class="eyebrow">리밸런싱 가이드</p><h2>Rebalancing Recommendations</h2></div></div>
+      <div id="rebalanceGuide" style="margin-top:16px;display:grid;gap:12px"></div>
+    </article>
+
+    <!-- 6. 종목 추가 모달 -->
+    <div id="addStockModal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.4);z-index:200;align-items:center;justify-content:center">
+      <div style="background:white;border-radius:16px;padding:28px;width:min(420px,90vw);box-shadow:0 40px 80px rgba(0,0,0,0.2)">
+        <h3 style="margin:0 0 20px">종목 추가</h3>
+        <div style="display:grid;gap:14px">
+          <div class="field"><label for="ns_ticker"><span>티커 (Ticker)</span></label><input id="ns_ticker" type="text" placeholder="AAPL" style="text-transform:uppercase;font-weight:700"/></div>
+          <div class="field"><label for="ns_name"><span>종목명</span></label><input id="ns_name" type="text" placeholder="Apple Inc"/></div>
+          <div class="field"><label for="ns_sector"><span>섹터</span></label>
+            <select id="ns_sector" style="min-height:42px;border:1px solid var(--line);border-radius:8px;padding:0 12px;font-weight:700;background:#fbfcfe">
+              <option>Technology</option><option>Financials</option><option>Healthcare</option>
+              <option>Consumer</option><option>Industrials</option><option>Energy</option>
+              <option>Real Estate</option><option>Utilities</option><option>Materials</option>
+            </select>
+          </div>
+          <div class="field"><label for="ns_shares"><span>수량 (Shares)</span></label><input id="ns_shares" type="number" min="0.001" step="0.001" placeholder="100"/></div>
+          <div class="field"><label for="ns_cost"><span>평균 매입가 ($)</span></label><input id="ns_cost" type="number" min="0" step="0.01" placeholder="150.00"/></div>
+          <div class="field"><label for="ns_price"><span>현재 주가 ($)</span></label><input id="ns_price" type="number" min="0" step="0.01" placeholder="180.00"/></div>
+        </div>
+        <div style="display:flex;gap:10px;margin-top:20px;justify-content:flex-end">
+          <button class="secondary-button" id="cancelStockBtn" type="button">취소</button>
+          <button class="primary-button" id="saveStockBtn" type="button">추가</button>
+        </div>
+      </div>
+    </div>
+  `;
+
+  // Draw charts after DOM is set
+  requestAnimationFrame(() => {
+    drawDonut("allocDonut", [
+      { name: "주식", value: calc.totalStocks, color: "#276ef1" },
+      { name: "채권", value: calc.totalBonds, color: "#14b8c4" },
+      { name: "현금", value: calc.totalCash, color: "#19a974" }
+    ]);
+    drawChart("accountChart", [
+      { name: "401k", values: [calc.k401Total], color: "#276ef1" },
+      { name: "IRA", values: [calc.iraTotal], color: "#7c5cff" },
+      { name: "Taxable", values: [calc.taxableTotal], color: "#14b8c4" },
+      { name: "Cash", values: [calc.cashTotal], color: "#19a974" }
+    ], ["계좌 유형"], { legend: true });
+
+    // Rebalancing guide
+    const target = acc.target;
+    const guide = [];
+    if (Math.abs(calc.stocksDrift) >= 3) {
+      const adjAmt = Math.abs(calc.stocksDrift / 100) * calc.totalAssets;
+      guide.push({
+        action: calc.stocksDrift > 0 ? "주식 비중 축소" : "주식 비중 확대",
+        detail: calc.stocksDrift > 0
+          ? `현재 ${calc.stocksPct.toFixed(1)}% → 목표 ${target.stocks}%. 약 ${money(adjAmt, true)}를 채권/현금으로 이동하세요.`
+          : `현재 ${calc.stocksPct.toFixed(1)}% → 목표 ${target.stocks}%. 약 ${money(adjAmt, true)}를 주식으로 추가 투자하세요.`,
+        color: calc.stocksDrift > 3 ? "var(--amber)" : "var(--green)"
+      });
+    }
+    if (Math.abs(calc.bondsDrift) >= 3) {
+      const adjAmt = Math.abs(calc.bondsDrift / 100) * calc.totalAssets;
+      guide.push({
+        action: calc.bondsDrift > 0 ? "채권 비중 축소" : "채권 비중 확대",
+        detail: `현재 ${calc.bondsPct.toFixed(1)}% → 목표 ${target.bonds}%. 약 ${money(adjAmt, true)} 조정 필요.`,
+        color: "var(--amber)"
+      });
+    }
+    const lossStocks = stocks.filter(s => s.currentPrice < s.costBasis);
+    if (lossStocks.length > 0) {
+      guide.push({
+        action: "세금 손실 확정 (Tax-Loss Harvesting) 기회",
+        detail: `손실 종목: ${lossStocks.map(s => s.ticker).join(", ")}. 매도 후 손실을 다른 자본이득과 상쇄할 수 있습니다.`,
+        color: "var(--blue)"
+      });
+    }
+    if (guide.length === 0) {
+      guide.push({ action: "✅ 포트폴리오 균형 양호", detail: "현재 자산 배분이 목표 범위 내에 있습니다. 정기적으로 점검하세요.", color: "var(--green)" });
+    }
+    // 401k match check
+    if (acc.k401.myContribPct < acc.k401.employerMatchPct) {
+      guide.push({
+        action: "⚠️ 고용주 매칭 미활용",
+        detail: `현재 기여율 ${acc.k401.myContribPct}%는 고용주 매칭 ${acc.k401.employerMatchPct}%에 미치지 못합니다. 기여율을 올리면 연 ${money(calc.employerContrib)}의 무료 보너스를 받을 수 있어요.`,
+        color: "var(--red)"
+      });
+    }
+
+    document.getElementById("rebalanceGuide").innerHTML = guide.map(g => `
+      <div style="padding:14px 16px;border-radius:10px;border-left:4px solid ${g.color};background:${g.color}11;display:grid;gap:4px">
+        <strong style="color:${g.color}">${g.action}</strong>
+        <span style="font-size:13px;color:var(--ink)">${g.detail}</span>
+      </div>
+    `).join("");
+
+    // Stock edit listeners
+    document.querySelectorAll(".stock-edit").forEach(input => {
+      input.addEventListener("change", () => {
+        const id = Number(input.dataset.id);
+        const field = input.dataset.field;
+        const stocks = loadStocks();
+        const st = stocks.find(s => s.id === id);
+        if (st) {
+          st[field] = Number(input.value) || 0;
+          saveStocks(stocks);
+          // Sync total to household investments
+          const total = stocks.reduce((s, x) => s + x.shares * x.currentPrice, 0);
+          state.household.investments = Math.round(total);
+          setSaveStatus(true);
+          renderInvestments();
+        }
+      });
+    });
+
+    // Add stock modal
+    document.getElementById("addStockBtn").addEventListener("click", () => {
+      document.getElementById("addStockModal").style.display = "flex";
+    });
+    document.getElementById("cancelStockBtn").addEventListener("click", () => {
+      document.getElementById("addStockModal").style.display = "none";
+    });
+    document.getElementById("saveStockBtn").addEventListener("click", () => {
+      const ticker = document.getElementById("ns_ticker").value.trim().toUpperCase();
+      const name = document.getElementById("ns_name").value.trim();
+      const shares = Number(document.getElementById("ns_shares").value);
+      const costBasis = Number(document.getElementById("ns_cost").value);
+      const currentPrice = Number(document.getElementById("ns_price").value);
+      const sector = document.getElementById("ns_sector").value;
+      if (!ticker || shares <= 0 || currentPrice <= 0) return;
+      const stocks = loadStocks();
+      const newId = Math.max(0, ...stocks.map(s => s.id)) + 1;
+      stocks.push({ id: newId, ticker, name: name || ticker, shares, costBasis, currentPrice, sector });
+      saveStocks(stocks);
+      state.household.investments = Math.round(stocks.reduce((s, x) => s + x.shares * x.currentPrice, 0));
+      setSaveStatus(true);
+      document.getElementById("addStockModal").style.display = "none";
+      renderInvestments();
+    });
+  });
+}
+
+window.deleteStock = function(id) {
+  if (!confirm("이 종목을 삭제할까요?")) return;
+  const stocks = loadStocks().filter(s => s.id !== id);
+  saveStocks(stocks);
+  state.household.investments = Math.round(stocks.reduce((s, x) => s + x.shares * x.currentPrice, 0));
+  setSaveStatus(true);
+  renderInvestments();
+};
 
 renderNav();
 setPage(currentPage);
