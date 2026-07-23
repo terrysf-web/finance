@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" content="#0f2742" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="LifePlan" />
+  <title>LifePlan</title>
+  <link rel="manifest" href="manifest.json" />
+  <link rel="apple-touch-icon" href="icon.svg" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div class="app-shell">
+    <header class="topbar">
+      <div>
+        <div class="eyebrow">FAMILY FINANCE</div>
+        <h1 id="screenTitle">LifePlan</h1>
+      </div>
+      <button class="icon-btn" id="editButton" aria-label="Edit">&#9998;</button>
+    </header>
+
+    <main id="app"></main>
+
+    <nav class="bottom-nav" aria-label="Primary">
+      <button class="nav-item active" data-screen="home"><span>&#8962;</span><small>Home</small></button>
+      <button class="nav-item" data-screen="house"><span>&#8962;</span><small>House</small></button>
+      <button class="nav-item" data-screen="college"><span>&#127891;</span><small>College</small></button>
+      <button class="nav-item" data-screen="investments"><span>&#8599;</span><small>Invest</small></button>
+      <button class="nav-item" data-screen="settings"><span>&#9881;</span><small>Setup</small></button>
+    </nav>
+  </div>
+
+  <div class="sheet-backdrop" id="sheetBackdrop"></div>
+  <section class="sheet" id="editSheet" aria-hidden="true">
+    <div class="sheet-handle"></div>
+    <div class="sheet-header">
+      <h2>Quick Update</h2>
+      <button class="icon-btn" id="closeSheet">&#10005;</button>
+    </div>
+    <form id="quickForm" class="form-stack">
+      <label>Current savings
+        <input type="number" id="qSavings" inputmode="decimal" />
+      </label>
+      <label>Monthly expenses
+        <input type="number" id="qExpenses" inputmode="decimal" />
+      </label>
+      <label>Next college payment
+        <input type="number" id="qCollege" inputmode="decimal" />
+      </label>
+      <label>Brokerage value
+        <input type="number" id="qBrokerage" inputmode="decimal" />
+      </label>
+      <button class="primary-btn" type="submit">Save changes</button>
+    </form>
+  </section>
+
+  <script src="app.js"></script>
+</body>
+</html>
